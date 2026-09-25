@@ -1,8 +1,16 @@
-# DuetAI
+<h1 align="center">DuetAI</h1>
 
-**Two coding agents. One focused terminal.**
+<p align="center">
+  <strong>Two coding agents. One focused terminal.</strong>
+</p>
 
-![DuetAI — plan with Claude, build with Codex](assets/duetai-teaser.jpg)
+<p align="center">
+  <img src="assets/duetai-teaser.jpg" alt="DuetAI — Claude plans and reviews, Codex implements and fixes" width="900">
+</p>
+
+<p align="center">
+  <code>Claude plans &amp; reviews</code> → <code>Codex implements &amp; fixes</code>
+</p>
 
 DuetAI is a small, local-first terminal orchestrator for running Claude Code and Codex as a disciplined pair. Claude plans and reviews; Codex implements. Both are the official CLIs you already use, so your existing LLM Proxy configuration and credentials stay in place.
 
