@@ -1,0 +1,4 @@
+node_modules/
+.duet/
+.env
+.DS_Store

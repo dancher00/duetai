@@ -1,0 +1,18 @@
+{
+  "codex": {
+    "command": "codex",
+    "profile": "llm-proxy-cu",
+    "sandbox": "workspace-write"
+  },
+  "claude": {
+    "command": "claude",
+    "permissionMode": "acceptEdits"
+  },
+  "workflow": {
+    "lead": "claude",
+    "maxRounds": 2,
+    "runTests": false,
+    "testCommand": "npm test"
+  },
+  "ui": { "maxEvents": 160 }
+}
