@@ -57,7 +57,7 @@ Codex is launched with `codex exec --profile llm-proxy-cu --sandbox workspace-wr
 ## Commands
 
 ```bash
-duet                         # interactive TUI
+duet                         # open the interactive terminal prompt
 duet run "your task"         # show useful plan, implementation, and review reports
 duet run --compact "task"     # show phases and verdict only
 duet run --verbose "task"     # include raw agent/tool output
@@ -67,7 +67,9 @@ duet doctor                  # check prerequisites
 duet init                    # create .duet.json
 ```
 
-The default output shows the useful result of each role: Claude's concrete plan, Codex's implementation decisions and validation, and Claude's review. It does not print internal provider diagnostics or every tool event. This reuses text the agents already produced, so displaying it does not make an additional model request. Use `--compact` for phases and verdict only, or `--verbose` for the raw agent/tool stream. Full structured events are always saved under `.duet/`. In the interactive TUI, press `v` on an empty prompt to toggle compact/details mode. `Ctrl-C` stops the UI and its agent subprocesses.
+Running `duet` opens a normal terminal prompt. Enter a task, wait for the pair to finish, then enter the next task. Use `/compact`, `/verbose`, or `/default` to change the output mode and `/exit` to quit. DuetAI also works outside a Git repository; Codex is started with its non-repository check disabled in that case.
+
+The default output shows the useful result of each role: Claude's concrete plan, Codex's implementation decisions and validation, and Claude's review. It does not print internal provider diagnostics or every tool event. This reuses text the agents already produced, so displaying it does not make an additional model request. Use `--compact` for phases and verdict only, or `--verbose` for the raw agent/tool stream. Full structured events are always saved under `.duet/`. `Ctrl-C` stops the current agent subprocesses.
 
 ## Configuration
 

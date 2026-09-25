@@ -26,6 +26,13 @@ test('unknown command prints usage', () => {
   assert.match(result.stdout, /duet doctor/);
 });
 
+test('opens and exits the interactive prompt', () => {
+  const result = spawnSync(process.execPath, [cli], { cwd: root, input: 'hi\n/exit\n', encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Claude plans and reviews/);
+  assert.match(result.stdout, /Привет! Что будем делать/);
+});
+
 test('doctor detects installed runtime', () => {
   const result = run('doctor');
   assert.equal(result.status, 0);
@@ -89,4 +96,30 @@ console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',tex
 test('includes verbose when using Claude stream-json output', () => {
   const source = fs.readFileSync(cli, 'utf8');
   assert.match(source, /--verbose.*--output-format.*stream-json/);
+  assert.match(source, /--skip-git-repo-check/);
+});
+
+test('allows Codex to run outside a Git repository', () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'duetai-no-git-'));
+  const claude = path.join(sandbox, 'mock-claude.js');
+  const codex = path.join(sandbox, 'mock-codex.js');
+  fs.writeFileSync(claude, `#!/usr/bin/env node
+const review = process.argv.join(' ').includes('meticulous senior reviewer');
+const text = review ? 'VERDICT: PASS\\nFINDINGS: none' : 'PLAN\\n1. Answer the request.';
+console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text}]}}));
+`);
+  fs.writeFileSync(codex, `#!/usr/bin/env node
+require('node:fs').writeFileSync('codex-args.json', JSON.stringify(process.argv.slice(2)));
+console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'DECISION: answered\\nCHANGED: none\\nVALIDATION: complete'}}));
+`);
+  fs.chmodSync(claude, 0o755);
+  fs.chmodSync(codex, 0o755);
+  fs.writeFileSync(path.join(sandbox, '.duet.json'), JSON.stringify({
+    claude: { command: claude }, codex: { command: codex }, workflow: { maxRounds: 1 }
+  }));
+  const result = spawnSync(process.execPath, [cli, 'run', 'Answer a question'], { cwd: sandbox, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const args = JSON.parse(fs.readFileSync(path.join(sandbox, 'codex-args.json'), 'utf8'));
+  assert.ok(args.includes('--skip-git-repo-check'));
+  fs.rmSync(sandbox, { recursive: true, force: true });
 });

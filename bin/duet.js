@@ -47,6 +47,7 @@ function loadState() { try { return JSON.parse(fs.readFileSync(stateFile, 'utf8'
 function appendEvent(event) { ensureState(); fs.appendFileSync(eventFile, JSON.stringify({ at: now(), ...event }) + '\n'); }
 function git(args) { const r = spawnSync('git', args, { cwd, encoding: 'utf8' }); return (r.stdout || '').trim(); }
 function gitSnapshot() { return { branch: git(['branch', '--show-current']), status: git(['status', '--short']), diff: git(['diff', '--stat']) }; }
+function isGitRepository() { return spawnSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd, stdio: 'ignore' }).status === 0; }
 
 function usage() {
   console.log(`${color('cyan', 'DuetAI')} ${color('dim', `v${VERSION}`)}\n\n` +
@@ -94,9 +95,9 @@ function runAgent(kind, prompt, config, onEvent) {
   return new Promise((resolve, reject) => {
     const isCodex = kind === 'codex';
     const args = isCodex
-      ? ['exec', '--profile', config.codex.profile, '--sandbox', config.codex.sandbox, '--json', prompt]
+      ? ['exec', '--profile', config.codex.profile, '--sandbox', config.codex.sandbox, '--json', ...(isGitRepository() ? [] : ['--skip-git-repo-check']), prompt]
       : ['-p', prompt, '--verbose', '--output-format', 'stream-json', '--permission-mode', config.claude.permissionMode];
-    const child = spawn(isCodex ? config.codex.command : config.claude.command, args, { cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(isCodex ? config.codex.command : config.claude.command, args, { cwd, env: process.env, stdio: [process.stdin.isTTY ? 'inherit' : 'ignore', 'pipe', 'pipe'] });
     activeChildren.add(child);
     let output = ''; let stderr = ''; let buffer = ''; const messages = [];
     const emit = (event) => { onEvent?.({ agent: kind, ...event }); };
@@ -203,6 +204,13 @@ function printReport(agent, title, text, shade, maxLines) {
   for (const line of report.split('\n')) console.log(`  ${color('dim', '│')} ${line}`);
 }
 
+function casualReply(input) {
+  const text = input.toLowerCase().replace(/[!?.]+$/g, '').trim();
+  if (['hi', 'hello', 'hey', 'привет', 'здравствуй', 'здравствуйте'].includes(text)) return 'Привет! Что будем делать?';
+  if (['help', '/help', 'помощь', 'что ты умеешь'].includes(text)) return 'Опиши задачу обычным текстом. Claude составит план, Codex выполнит его, затем Claude проверит результат.';
+  return '';
+}
+
 function createConsoleRenderer({ verbose = false, compactMode = false } = {}) {
   let spinner = null;
   let spinnerLabel = '';
@@ -247,37 +255,31 @@ function createConsoleRenderer({ verbose = false, compactMode = false } = {}) {
   };
 }
 
-function renderTui(model) {
-  const width = process.stdout.columns || 100; const height = process.stdout.rows || 30; const inner = Math.max(40, width - 2);
-  const visible = model.verbose ? model.events.filter(e => e.type !== 'stream' || e.text?.trim()) : model.events.filter(e => ['phase', 'phase.completed', 'complete', 'error'].includes(e.type));
-  const events = visible.slice(-Math.max(5, height - 11));
-  const title = ` ${color('bold', 'DuetAI')} ${color('dim', '·')} ${model.state?.phase || 'ready'} ${color('dim', '·')} ${model.state?.round ? `round ${model.state.round}` : 'two agents, one flow'} ${color('dim', `· v ${model.verbose ? 'compact' : 'details'}`)}`;
-  const line = color('dim', '─'.repeat(inner));
-  const body = events.map(e => {
-    const who = e.agent ? color(e.agent === 'codex' ? 'green' : 'magenta', e.agent.padEnd(7)) : color('cyan', 'system '.padEnd(7));
-    let text = e.text || e.phase || e.type || '';
-    if (e.type === 'phase.completed') text = e.phase === 'review' ? `review · ${reviewVerdict(e.text)}` : `${e.phase} complete`;
-    return `${who} ${compact(text.replaceAll('\n', ' '), inner - 10)}`;
-  });
-  const task = model.state?.task ? compact(model.state.task, inner - 10) : 'Type a task below';
-  process.stdout.write(ansi.clear + ansi.hide + title + '\n' + line + '\n' + ` ${color('dim', 'task:')} ${task}\n` + line + '\n' + body.join('\n') + '\n' + line + '\n' + ` ${color('dim', '›')} ${model.input}` + ansi.show);
-}
-
 async function interactive(config) {
-  const model = { input: '', events: [], state: loadState(), verbose: false };
-  const add = (e, s) => { model.events.push(e); model.state = s; renderTui(model); };
-  readline.emitKeypressEvents(process.stdin); process.stdin.setRawMode(true); process.stdin.resume(); renderTui(model);
-  let running = false;
-  process.stdin.on('keypress', async (_, key) => {
-    if (key?.ctrl && key.name === 'c') shutdown(130);
-    if (key?.name === 'v' && !running && !model.input) model.verbose = !model.verbose;
-    else if (key?.name === 'return') {
-      const task = model.input.trim(); model.input = ''; if (!task || running) return; running = true; renderTui(model);
-      try { await workflow(task, config, add); } catch {} finally { running = false; renderTui(model); }
-    } else if (key?.name === 'backspace') model.input = model.input.slice(0, -1);
-    else if (key?.sequence && !key.ctrl && !key.meta) model.input += key.sequence;
-    renderTui(model);
-  });
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: Boolean(process.stdin.isTTY) });
+  let mode = 'default';
+  console.log(`${color('cyan', 'DuetAI')} ${color('dim', `v${VERSION} · ${cwd}`)}`);
+  console.log(color('dim', 'Claude plans and reviews · Codex implements · /exit to quit\n'));
+  rl.setPrompt(`${color('cyan', '›')} `);
+  rl.prompt();
+  rl.on('SIGINT', () => shutdown(130));
+  for await (const input of rl) {
+    const task = input.trim();
+    if (!task) { rl.prompt(); continue; }
+    if (['/exit', '/quit'].includes(task)) break;
+    if (task === '/compact') { mode = 'compact'; console.log(color('dim', 'Compact output enabled.')); rl.prompt(); continue; }
+    if (task === '/verbose') { mode = 'verbose'; console.log(color('dim', 'Verbose output enabled.')); rl.prompt(); continue; }
+    if (task === '/default') { mode = 'default'; console.log(color('dim', 'Useful reports enabled.')); rl.prompt(); continue; }
+    const reply = casualReply(task);
+    if (reply) { console.log(reply); rl.prompt(); continue; }
+    rl.pause();
+    try { await workflow(task, config, createConsoleRenderer({ verbose: mode === 'verbose', compactMode: mode === 'compact' })); }
+    catch {}
+    rl.resume();
+    console.log();
+    rl.prompt();
+  }
+  rl.close();
 }
 
 function shutdown(code = 0) {
