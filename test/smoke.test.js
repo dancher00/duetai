@@ -45,6 +45,7 @@ const text = prompt.includes('meticulous senior reviewer')
 console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text}]}}));
 `);
   fs.writeFileSync(codex, `#!/usr/bin/env node
+console.error('internal provider diagnostic');
 console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'Implementation complete. Tests passed.'}}));
 `);
   fs.chmodSync(claude, 0o755);
@@ -60,6 +61,15 @@ console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',tex
   assert.match(state.outputs.plan, /Plan:/);
   assert.match(state.outputs.implementation, /Implementation complete/);
   assert.match(state.outputs.review, /VERDICT PASS/);
+  assert.match(result.stdout, /Plan ready/);
+  assert.match(result.stdout, /Review complete/);
+  assert.match(result.stdout, /Workflow complete/);
+  assert.doesNotMatch(result.stdout, /\[claude\]|\[codex\]/);
+  assert.doesNotMatch(result.stderr, /internal provider diagnostic/);
+  const verbose = spawnSync(process.execPath, [cli, 'run', '--verbose', 'Create a tiny feature'], { cwd: sandbox, encoding: 'utf8' });
+  assert.equal(verbose.status, 0, verbose.stderr);
+  assert.match(verbose.stdout, /\[claude\]|\[codex\]/);
+  assert.match(verbose.stderr, /internal provider diagnostic/);
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 

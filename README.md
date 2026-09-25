@@ -59,13 +59,14 @@ Codex is launched with `codex exec --profile llm-proxy-cu --sandbox workspace-wr
 ```bash
 duet                         # interactive TUI
 duet run "your task"         # run the complete workflow
+duet run --verbose "task"     # include raw agent/tool output
 duet resume                  # continue the saved task
 duet status                  # inspect the latest session
 duet doctor                  # check prerequisites
 duet init                    # create .duet.json
 ```
 
-The interactive TUI is intentionally dependency-free and works over SSH. Type a task and press Enter. `Ctrl-C` stops the UI; agent subprocesses are owned by the current terminal session.
+The default output is intentionally compact: phases, changed files, test status, review verdict, rounds, and duration. Full structured events are still saved under `.duet/`. Use `--verbose` for raw agent/tool output. In the interactive TUI, press `v` on an empty prompt to toggle compact/details mode. `Ctrl-C` stops the UI and its agent subprocesses.
 
 ## Configuration
 

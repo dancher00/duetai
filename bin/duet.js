@@ -52,6 +52,7 @@ function usage() {
   console.log(`${color('cyan', 'DuetAI')} ${color('dim', `v${VERSION}`)}\n\n` +
 `  duet                         open the interactive workspace\n` +
 `  duet run "task"              run the Claude → Codex → review workflow\n` +
+`  duet run --verbose "task"    include raw agent and tool output\n` +
 `  duet resume                  continue the last saved task\n` +
 `  duet status                  show the last session\n` +
 `  duet doctor                  check local prerequisites\n` +
@@ -132,7 +133,7 @@ function extractText(obj) {
 function compact(text, max = 1100) { return text.length > max ? text.slice(0, max) + '\n…' : text; }
 function id() { return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`; }
 
-async function workflow(task, config, render = consoleRenderer) {
+async function workflow(task, config, render = createConsoleRenderer()) {
   ensureState();
   const state = { id: id(), task, phase: 'starting', round: 0, maxRounds: config.workflow.maxRounds, startedAt: now(), updatedAt: now(), snapshot: gitSnapshot(), outputs: {} };
   saveState(state); appendEvent({ type: 'session.started', task });
@@ -156,33 +157,91 @@ async function workflow(task, config, render = consoleRenderer) {
   } catch (error) { state.phase = 'failed'; state.error = error.message; state.updatedAt = now(); saveState(state); appendEvent({ type: 'session.failed', error: error.message }); render({ type: 'error', text: error.message }, state); throw error; }
 }
 
-function consoleRenderer(e, state) {
-  if (e.type === 'stream') process.stdout.write(color(e.agent === 'codex' ? 'green' : 'magenta', `\n[${e.agent}] `) + e.text);
-  else if (e.type === 'log') process.stderr.write(color('dim', `\n${e.text}`));
-  else if (e.type === 'phase') console.log(`\n${color('cyan', '◆')} ${color('bold', e.agent ? `${e.phase} · ${e.agent}` : e.phase)}${e.round ? color('dim', ` · round ${e.round}`) : ''}`);
-  else if (e.type === 'phase.completed') console.log(`\n${color('green', '✓')} ${e.phase || 'step'} complete`);
-  else if (e.type === 'complete') console.log(`\n\n${color('green', '✓ ' + e.text)}\n${color('dim', state.snapshot?.diff || '')}`);
-  else if (e.type === 'error') console.error(`\n${color('red', '✗ ' + e.text)}`);
+function phaseLabel(phase, agent) {
+  const labels = { planning: 'Claude is preparing the plan', implementation: 'Codex is implementing', review: 'Claude is reviewing', tests: 'Running final tests' };
+  return labels[phase] || (agent ? `${agent} · ${phase}` : phase);
+}
+
+function snapshotSummary(snapshot) {
+  const files = (snapshot?.status || '').split('\n').filter(Boolean).length;
+  const stat = (snapshot?.diff || '').split('\n').filter(Boolean).at(-1) || '';
+  if (!files && !stat) return 'no working-tree changes';
+  return [files ? `${files} file${files === 1 ? '' : 's'} changed` : '', stat].filter(Boolean).join(' · ');
+}
+
+function reviewVerdict(text) {
+  const match = String(text || '').match(/\bVERDICT\s*:?\s*(PASS|NEEDS(?:_|\s+)FIX)\b/i);
+  return match ? match[1].toUpperCase().replace(/\s+/g, '_') : 'REVIEWED';
+}
+
+function elapsed(state) {
+  const ms = Math.max(0, new Date(state.updatedAt || now()) - new Date(state.startedAt));
+  const seconds = Math.round(ms / 1000);
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+function createConsoleRenderer({ verbose = false } = {}) {
+  let spinner = null;
+  let spinnerLabel = '';
+  let spinnerStarted = 0;
+  const frames = ['◐', '◓', '◑', '◒'];
+  let frame = 0;
+  const stopSpinner = () => {
+    if (!spinner) return;
+    clearInterval(spinner); spinner = null;
+    if (process.stdout.isTTY) process.stdout.write('\r\x1b[2K');
+  };
+  const startSpinner = (label) => {
+    stopSpinner(); spinnerLabel = label; spinnerStarted = Date.now();
+    if (!process.stdout.isTTY || verbose) { console.log(`\n${color('cyan', '◆')} ${color('bold', label)}`); return; }
+    const draw = () => process.stdout.write(`\r${color('cyan', frames[frame++ % frames.length])} ${label} ${color('dim', `${Math.round((Date.now() - spinnerStarted) / 1000)}s`)}`);
+    draw(); spinner = setInterval(draw, 250);
+  };
+  return (e, state) => {
+    if (verbose && e.type === 'stream' && e.text?.trim()) process.stdout.write(color(e.agent === 'codex' ? 'green' : 'magenta', `\n[${e.agent}] `) + e.text);
+    else if (verbose && e.type === 'log' && e.text?.trim()) process.stderr.write(color('dim', `\n${e.text}`));
+    else if (e.type === 'phase') startSpinner(phaseLabel(e.phase, e.agent) + (e.round ? ` · round ${e.round}/${state.maxRounds}` : ''));
+    else if (e.type === 'phase.completed') {
+      stopSpinner();
+      if (e.phase === 'planning') console.log(`${color('green', '✓')} Plan ready`);
+      else if (e.phase === 'implementation') console.log(`${color('green', '✓')} Implementation complete ${color('dim', `· ${snapshotSummary(e.snapshot)}`)}`);
+      else if (e.phase === 'review') console.log(`${color('green', '✓')} Review complete ${color(reviewNeedsFix(e.text) ? 'yellow' : 'green', `· ${reviewVerdict(e.text)}`)}`);
+      else if (e.phase === 'tests') console.log(`${e.code === 0 ? color('green', '✓') : color('red', '✗')} Tests ${e.code === 0 ? 'passed' : `failed (exit ${e.code})`}`);
+    } else if (e.type === 'complete') {
+      stopSpinner();
+      console.log(`\n${color('green', '✓ Workflow complete')}`);
+      console.log(`  ${snapshotSummary(state.snapshot)}`);
+      console.log(`  review: ${reviewVerdict(state.outputs?.review)} · rounds: ${state.round}/${state.maxRounds} · duration: ${elapsed(state)}`);
+      console.log(`  ${color('dim', 'details: .duet/session.json · raw events: .duet/events.jsonl')}`);
+    } else if (e.type === 'error') { stopSpinner(); console.error(`\n${color('red', '✗ ' + e.text)}`); }
+  };
 }
 
 function renderTui(model) {
   const width = process.stdout.columns || 100; const height = process.stdout.rows || 30; const inner = Math.max(40, width - 2);
-  const events = model.events.slice(-Math.max(5, height - 11));
-  const title = ` ${color('bold', 'DuetAI')} ${color('dim', '·')} ${model.state?.phase || 'ready'} ${color('dim', '·')} ${model.state?.round ? `round ${model.state.round}` : 'two agents, one flow'}`;
+  const visible = model.verbose ? model.events.filter(e => e.type !== 'stream' || e.text?.trim()) : model.events.filter(e => ['phase', 'phase.completed', 'complete', 'error'].includes(e.type));
+  const events = visible.slice(-Math.max(5, height - 11));
+  const title = ` ${color('bold', 'DuetAI')} ${color('dim', '·')} ${model.state?.phase || 'ready'} ${color('dim', '·')} ${model.state?.round ? `round ${model.state.round}` : 'two agents, one flow'} ${color('dim', `· v ${model.verbose ? 'compact' : 'details'}`)}`;
   const line = color('dim', '─'.repeat(inner));
-  const body = events.map(e => { const who = e.agent ? color(e.agent === 'codex' ? 'green' : 'magenta', e.agent.padEnd(7)) : color('cyan', 'system '.padEnd(7)); return `${who} ${compact((e.text || e.phase || e.type || '').replaceAll('\n', ' '), inner - 10)}`; });
+  const body = events.map(e => {
+    const who = e.agent ? color(e.agent === 'codex' ? 'green' : 'magenta', e.agent.padEnd(7)) : color('cyan', 'system '.padEnd(7));
+    let text = e.text || e.phase || e.type || '';
+    if (e.type === 'phase.completed') text = e.phase === 'review' ? `review · ${reviewVerdict(e.text)}` : `${e.phase} complete`;
+    return `${who} ${compact(text.replaceAll('\n', ' '), inner - 10)}`;
+  });
   const task = model.state?.task ? compact(model.state.task, inner - 10) : 'Type a task below';
   process.stdout.write(ansi.clear + ansi.hide + title + '\n' + line + '\n' + ` ${color('dim', 'task:')} ${task}\n` + line + '\n' + body.join('\n') + '\n' + line + '\n' + ` ${color('dim', '›')} ${model.input}` + ansi.show);
 }
 
 async function interactive(config) {
-  const model = { input: '', events: [], state: loadState() };
+  const model = { input: '', events: [], state: loadState(), verbose: false };
   const add = (e, s) => { model.events.push(e); model.state = s; renderTui(model); };
   readline.emitKeypressEvents(process.stdin); process.stdin.setRawMode(true); process.stdin.resume(); renderTui(model);
   let running = false;
   process.stdin.on('keypress', async (_, key) => {
     if (key?.ctrl && key.name === 'c') shutdown(130);
-    if (key?.name === 'return') {
+    if (key?.name === 'v' && !running && !model.input) model.verbose = !model.verbose;
+    else if (key?.name === 'return') {
       const task = model.input.trim(); model.input = ''; if (!task || running) return; running = true; renderTui(model);
       try { await workflow(task, config, add); } catch {} finally { running = false; renderTui(model); }
     } else if (key?.name === 'backspace') model.input = model.input.slice(0, -1);
@@ -208,8 +267,8 @@ async function main() {
   if (command === 'doctor') return doctor();
   if (command === 'status') return status();
   if (command === 'init') return init();
-  if (command === 'run') { const task = rest.join(' ').trim(); if (!task) return usage(); await workflow(task, config); return; }
-  if (command === 'resume') { const s = loadState(); if (!s?.task) return console.log('No resumable session.'); await workflow(`Continue the previous task. Original task:\n${s.task}\nPrevious review:\n${s.outputs?.review || ''}`, config); return; }
+  if (command === 'run') { const verbose = rest.includes('--verbose'); const task = rest.filter(x => x !== '--verbose').join(' ').trim(); if (!task) return usage(); await workflow(task, config, createConsoleRenderer({ verbose })); return; }
+  if (command === 'resume') { const verbose = rest.includes('--verbose'); const s = loadState(); if (!s?.task) return console.log('No resumable session.'); await workflow(`Continue the previous task. Original task:\n${s.task}\nPrevious review:\n${s.outputs?.review || ''}`, config, createConsoleRenderer({ verbose })); return; }
   if (command && command !== 'tui') return usage();
   await interactive(config);
 }
