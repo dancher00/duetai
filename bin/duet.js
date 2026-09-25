@@ -52,6 +52,7 @@ function usage() {
   console.log(`${color('cyan', 'DuetAI')} ${color('dim', `v${VERSION}`)}\n\n` +
 `  duet                         open the interactive workspace\n` +
 `  duet run "task"              run the Claude → Codex → review workflow\n` +
+`  duet run --compact "task"    show phases and verdict only\n` +
 `  duet run --verbose "task"    include raw agent and tool output\n` +
 `  duet resume                  continue the last saved task\n` +
 `  duet status                  show the last session\n` +
@@ -97,14 +98,18 @@ function runAgent(kind, prompt, config, onEvent) {
       : ['-p', prompt, '--verbose', '--output-format', 'stream-json', '--permission-mode', config.claude.permissionMode];
     const child = spawn(isCodex ? config.codex.command : config.claude.command, args, { cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
     activeChildren.add(child);
-    let output = ''; let stderr = ''; let buffer = '';
+    let output = ''; let stderr = ''; let buffer = ''; const messages = [];
     const emit = (event) => { onEvent?.({ agent: kind, ...event }); };
     child.stdout.on('data', (chunk) => {
       buffer += chunk.toString();
       const lines = buffer.split('\n'); buffer = lines.pop() || '';
       for (const line of lines) {
         if (!line.trim()) continue;
-        try { const obj = JSON.parse(line); output += extractText(obj); emit({ type: 'stream', text: extractText(obj), raw: obj }); }
+        try {
+          const obj = JSON.parse(line); const text = extractText(obj);
+          if (text.trim()) { messages.push(text.trim()); output += `${output ? '\n' : ''}${text.trim()}`; }
+          emit({ type: 'stream', text, raw: obj });
+        }
         catch { output += line + '\n'; emit({ type: 'stream', text: line }); }
       }
     });
@@ -112,8 +117,9 @@ function runAgent(kind, prompt, config, onEvent) {
     child.on('error', reject);
     child.on('close', (code, signal) => {
       activeChildren.delete(child);
-      if (buffer.trim()) { output += buffer; emit({ type: 'stream', text: buffer }); }
-      if (code === 0) resolve({ output: output.trim(), stderr: stderr.trim() });
+      if (buffer.trim()) { output += `${output ? '\n' : ''}${buffer.trim()}`; messages.push(buffer.trim()); emit({ type: 'stream', text: buffer }); }
+      const finalOutput = messages.at(-1) || output.trim();
+      if (code === 0) resolve({ output: finalOutput, stderr: stderr.trim() });
       else reject(new Error(`${kind} exited with ${signal || `code ${code}`}${stderr ? `: ${stderr.trim().slice(-800)}` : ''}`));
     });
   });
@@ -140,14 +146,14 @@ async function workflow(task, config, render = createConsoleRenderer()) {
   const event = (e) => { state.updatedAt = now(); appendEvent(e); render(e, state); saveState(state); };
   try {
     state.phase = 'planning'; event({ type: 'phase', phase: state.phase, agent: 'claude' });
-    const plan = await runAgent('claude', `You are the lead architect in DuetAI. Do not edit files. Analyze this task and produce a concise implementation plan with acceptance criteria, likely files, risks, and test commands.\n\nTASK:\n${task}`, config, event);
+    const plan = await runAgent('claude', `You are the lead architect in DuetAI. Do not edit files. Inspect the repository and return a concrete plan for the task. Your final response must be useful in a terminal and no longer than 12 lines. Use exactly these headings: PLAN, FILES, ACCEPTANCE, RISKS, TESTS. Prefer specific file paths and commands; do not narrate tool calls.\n\nTASK:\n${task}`, config, event);
     state.outputs.plan = plan.output; event({ type: 'phase.completed', phase: 'planning', text: compact(plan.output) });
     for (let round = 1; round <= config.workflow.maxRounds; round++) {
       state.round = round; state.phase = 'implementation'; event({ type: 'phase', phase: state.phase, agent: 'codex', round });
-      const implementation = await runAgent('codex', `You are the implementation engineer. Work directly in the current repository. Implement the user's task using the lead plan below. Make the smallest complete change, run relevant tests, and report files changed and test results.\n\nUSER TASK:\n${task}\n\nLEAD PLAN:\n${state.outputs.plan}\n\n${round > 1 ? `PREVIOUS REVIEW:\n${state.outputs.review}` : ''}`, config, event);
+      const implementation = await runAgent('codex', `You are the implementation engineer. Work directly in the current repository. Implement the user's task using the lead plan below. Make the smallest complete change and run relevant tests. Your final response must be useful in a terminal and no longer than 10 lines. Use exactly these headings: DECISION, CHANGED, VALIDATION. Do not narrate tool calls.\n\nUSER TASK:\n${task}\n\nLEAD PLAN:\n${state.outputs.plan}\n\n${round > 1 ? `PREVIOUS REVIEW:\n${state.outputs.review}` : ''}`, config, event);
       state.outputs.implementation = implementation.output; state.snapshot = gitSnapshot(); event({ type: 'phase.completed', phase: 'implementation', text: compact(implementation.output), snapshot: state.snapshot });
       state.phase = 'review'; event({ type: 'phase', phase: state.phase, agent: 'claude', round });
-      const review = await runAgent('claude', `You are a meticulous senior reviewer. Do not edit files. Inspect the current git diff and verify the task. Return exactly: VERDICT (PASS or NEEDS_FIX), critical findings, suggested fixes, and tests to run.\n\nTASK:\n${task}\n\nLEAD PLAN:\n${state.outputs.plan}`, { ...config, claude: { ...config.claude, permissionMode: 'plan' } }, event);
+      const review = await runAgent('claude', `You are a meticulous senior reviewer. Do not edit files. Inspect the current git diff and verify the task. Your final response must be useful in a terminal and no longer than 10 lines. Use exactly these headings: VERDICT (PASS or NEEDS_FIX), FINDINGS, WHY, TESTS. Do not narrate tool calls.\n\nTASK:\n${task}\n\nLEAD PLAN:\n${state.outputs.plan}`, { ...config, claude: { ...config.claude, permissionMode: 'plan' } }, event);
       state.outputs.review = review.output; state.snapshot = gitSnapshot(); event({ type: 'phase.completed', phase: 'review', text: compact(review.output), snapshot: state.snapshot });
       if (!reviewNeedsFix(review.output)) break;
       if (round === config.workflow.maxRounds) break;
@@ -181,7 +187,23 @@ function elapsed(state) {
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
-function createConsoleRenderer({ verbose = false } = {}) {
+function reportText(text, maxLines = 12, maxChars = 1400) {
+  const lines = String(text || '').replace(/\x1b\[[0-9;]*m/g, '').split('\n')
+    .map(line => line.trimEnd()).filter((line, index, all) => line.trim() || (index > 0 && all[index - 1]?.trim()));
+  let result = lines.slice(0, maxLines).join('\n').trim();
+  if (result.length > maxChars) result = result.slice(0, maxChars).trimEnd() + '…';
+  if (lines.length > maxLines) result += '\n…';
+  return result;
+}
+
+function printReport(agent, title, text, shade, maxLines) {
+  const report = reportText(text, maxLines);
+  if (!report) return;
+  console.log(`\n  ${color(shade, agent)} ${color('dim', '·')} ${color('bold', title)}`);
+  for (const line of report.split('\n')) console.log(`  ${color('dim', '│')} ${line}`);
+}
+
+function createConsoleRenderer({ verbose = false, compactMode = false } = {}) {
   let spinner = null;
   let spinnerLabel = '';
   let spinnerStarted = 0;
@@ -204,9 +226,16 @@ function createConsoleRenderer({ verbose = false } = {}) {
     else if (e.type === 'phase') startSpinner(phaseLabel(e.phase, e.agent) + (e.round ? ` · round ${e.round}/${state.maxRounds}` : ''));
     else if (e.type === 'phase.completed') {
       stopSpinner();
-      if (e.phase === 'planning') console.log(`${color('green', '✓')} Plan ready`);
-      else if (e.phase === 'implementation') console.log(`${color('green', '✓')} Implementation complete ${color('dim', `· ${snapshotSummary(e.snapshot)}`)}`);
-      else if (e.phase === 'review') console.log(`${color('green', '✓')} Review complete ${color(reviewNeedsFix(e.text) ? 'yellow' : 'green', `· ${reviewVerdict(e.text)}`)}`);
+      if (e.phase === 'planning') {
+        console.log(`${color('green', '✓')} Plan ready`);
+        if (!compactMode && !verbose) printReport('Claude', 'Plan', e.text, 'magenta', 12);
+      } else if (e.phase === 'implementation') {
+        console.log(`${color('green', '✓')} Implementation complete ${color('dim', `· ${snapshotSummary(e.snapshot)}`)}`);
+        if (!compactMode && !verbose) printReport('Codex', 'Implementation', e.text, 'green', 10);
+      } else if (e.phase === 'review') {
+        console.log(`${color('green', '✓')} Review complete ${color(reviewNeedsFix(e.text) ? 'yellow' : 'green', `· ${reviewVerdict(e.text)}`)}`);
+        if (!compactMode && !verbose) printReport('Claude', 'Review', e.text, 'magenta', 10);
+      }
       else if (e.phase === 'tests') console.log(`${e.code === 0 ? color('green', '✓') : color('red', '✗')} Tests ${e.code === 0 ? 'passed' : `failed (exit ${e.code})`}`);
     } else if (e.type === 'complete') {
       stopSpinner();
@@ -268,8 +297,8 @@ async function main() {
   if (command === 'doctor') return doctor();
   if (command === 'status') return status();
   if (command === 'init') return init();
-  if (command === 'run') { const verbose = rest.includes('--verbose'); const task = rest.filter(x => x !== '--verbose').join(' ').trim(); if (!task) return usage(); await workflow(task, config, createConsoleRenderer({ verbose })); return; }
-  if (command === 'resume') { const verbose = rest.includes('--verbose'); const s = loadState(); if (!s?.task) return console.log('No resumable session.'); await workflow(`Continue the previous task. Original task:\n${s.task}\nPrevious review:\n${s.outputs?.review || ''}`, config, createConsoleRenderer({ verbose })); return; }
+  if (command === 'run') { const verbose = rest.includes('--verbose'); const compactMode = rest.includes('--compact'); const task = rest.filter(x => !['--verbose', '--compact'].includes(x)).join(' ').trim(); if (!task) return usage(); await workflow(task, config, createConsoleRenderer({ verbose, compactMode })); return; }
+  if (command === 'resume') { const verbose = rest.includes('--verbose'); const compactMode = rest.includes('--compact'); const s = loadState(); if (!s?.task) return console.log('No resumable session.'); await workflow(`Continue the previous task. Original task:\n${s.task}\nPrevious review:\n${s.outputs?.review || ''}`, config, createConsoleRenderer({ verbose, compactMode })); return; }
   if (command && command !== 'tui') return usage();
   await interactive(config);
 }

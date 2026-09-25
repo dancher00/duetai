@@ -40,13 +40,15 @@ test('completes a mocked Claude and Codex workflow', () => {
   fs.writeFileSync(claude, `#!/usr/bin/env node
 const prompt = process.argv.join(' ');
 const text = prompt.includes('meticulous senior reviewer')
-  ? 'VERDICT PASS\\nNo critical findings.'
-  : 'Plan: implement the requested change and verify it.';
+  ? 'VERDICT: PASS\\nFINDINGS: None.\\nWHY: The change matches the task.\\nTESTS: npm test passed.'
+  : 'PLAN\\n1. Inspect the target.\\n2. Implement the feature.\\nFILES: src/feature.js\\nACCEPTANCE: tests pass.\\nRISKS: none.\\nTESTS: npm test';
+console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'Inspecting the repository.'}]}}));
 console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text}]}}));
 `);
   fs.writeFileSync(codex, `#!/usr/bin/env node
 console.error('internal provider diagnostic');
-console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'Implementation complete. Tests passed.'}}));
+console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'Working on the implementation.'}}));
+console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'DECISION: Kept the change local.\\nCHANGED: src/feature.js\\nVALIDATION: npm test passed.'}}));
 `);
   fs.chmodSync(claude, 0o755);
   fs.chmodSync(codex, 0o755);
@@ -58,10 +60,18 @@ console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',tex
   assert.equal(result.status, 0, result.stderr);
   const state = JSON.parse(fs.readFileSync(path.join(sandbox, '.duet', 'session.json'), 'utf8'));
   assert.equal(state.phase, 'complete');
-  assert.match(state.outputs.plan, /Plan:/);
-  assert.match(state.outputs.implementation, /Implementation complete/);
-  assert.match(state.outputs.review, /VERDICT PASS/);
+  assert.match(state.outputs.plan, /PLAN/);
+  assert.doesNotMatch(state.outputs.plan, /Inspecting the repository/);
+  assert.match(state.outputs.implementation, /DECISION/);
+  assert.doesNotMatch(state.outputs.implementation, /Working on the implementation/);
+  assert.match(state.outputs.review, /VERDICT: PASS/);
   assert.match(result.stdout, /Plan ready/);
+  assert.match(result.stdout, /Claude.*Plan/s);
+  assert.match(result.stdout, /Codex.*Implementation/s);
+  assert.match(result.stdout, /Claude.*Review/s);
+  assert.match(result.stdout, /Inspect the target/);
+  assert.match(result.stdout, /Kept the change local/);
+  assert.match(result.stdout, /The change matches the task/);
   assert.match(result.stdout, /Review complete/);
   assert.match(result.stdout, /Workflow complete/);
   assert.doesNotMatch(result.stdout, /\[claude\]|\[codex\]/);
@@ -70,6 +80,9 @@ console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',tex
   assert.equal(verbose.status, 0, verbose.stderr);
   assert.match(verbose.stdout, /\[claude\]|\[codex\]/);
   assert.match(verbose.stderr, /internal provider diagnostic/);
+  const compact = spawnSync(process.execPath, [cli, 'run', '--compact', 'Create a tiny feature'], { cwd: sandbox, encoding: 'utf8' });
+  assert.equal(compact.status, 0, compact.stderr);
+  assert.doesNotMatch(compact.stdout, /Inspect the target|Kept the change local|The change matches the task/);
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 

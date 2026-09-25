@@ -58,7 +58,8 @@ Codex is launched with `codex exec --profile llm-proxy-cu --sandbox workspace-wr
 
 ```bash
 duet                         # interactive TUI
-duet run "your task"         # run the complete workflow
+duet run "your task"         # show useful plan, implementation, and review reports
+duet run --compact "task"     # show phases and verdict only
 duet run --verbose "task"     # include raw agent/tool output
 duet resume                  # continue the saved task
 duet status                  # inspect the latest session
@@ -66,7 +67,7 @@ duet doctor                  # check prerequisites
 duet init                    # create .duet.json
 ```
 
-The default output is intentionally compact: phases, changed files, test status, review verdict, rounds, and duration. Full structured events are still saved under `.duet/`. Use `--verbose` for raw agent/tool output. In the interactive TUI, press `v` on an empty prompt to toggle compact/details mode. `Ctrl-C` stops the UI and its agent subprocesses.
+The default output shows the useful result of each role: Claude's concrete plan, Codex's implementation decisions and validation, and Claude's review. It does not print internal provider diagnostics or every tool event. This reuses text the agents already produced, so displaying it does not make an additional model request. Use `--compact` for phases and verdict only, or `--verbose` for the raw agent/tool stream. Full structured events are always saved under `.duet/`. In the interactive TUI, press `v` on an empty prompt to toggle compact/details mode. `Ctrl-C` stops the UI and its agent subprocesses.
 
 ## Configuration
 
