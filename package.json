@@ -4,7 +4,11 @@
   "description": "A focused terminal workspace for Claude Code and Codex working as a team.",
   "type": "module",
   "bin": { "duet": "bin/duet.js" },
-  "scripts": { "start": "node bin/duet.js", "check": "node --check bin/duet.js" },
+  "scripts": {
+    "start": "node bin/duet.js",
+    "check": "node --check bin/duet.js",
+    "test": "node --test"
+  },
   "keywords": ["claude-code", "codex", "ai", "agents", "tui", "terminal"],
   "license": "MIT",
   "engines": { "node": ">=20" }

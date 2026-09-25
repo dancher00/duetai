@@ -1,4 +1,5 @@
 node_modules/
 .duet/
+.duet.json
 .env
 .DS_Store

@@ -7,6 +7,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import readline from 'node:readline';
 
 const VERSION = '0.1.0';
+const activeChildren = new Set();
 const cwd = process.cwd();
 const stateDir = path.join(cwd, '.duet');
 const stateFile = path.join(stateDir, 'session.json');
@@ -93,6 +94,7 @@ function runAgent(kind, prompt, config, onEvent) {
       ? ['exec', '--profile', config.codex.profile, '--sandbox', config.codex.sandbox, '--json', prompt]
       : ['-p', prompt, '--output-format', 'stream-json', '--permission-mode', config.claude.permissionMode];
     const child = spawn(isCodex ? config.codex.command : config.claude.command, args, { cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    activeChildren.add(child);
     let output = ''; let stderr = ''; let buffer = '';
     const emit = (event) => { onEvent?.({ agent: kind, ...event }); };
     child.stdout.on('data', (chunk) => {
@@ -107,6 +109,7 @@ function runAgent(kind, prompt, config, onEvent) {
     child.stderr.on('data', (chunk) => { stderr += chunk.toString(); const text = chunk.toString().trim(); if (text) emit({ type: 'log', text }); });
     child.on('error', reject);
     child.on('close', (code, signal) => {
+      activeChildren.delete(child);
       if (buffer.trim()) { output += buffer; emit({ type: 'stream', text: buffer }); }
       if (code === 0) resolve({ output: output.trim(), stderr: stderr.trim() });
       else reject(new Error(`${kind} exited with ${signal || `code ${code}`}${stderr ? `: ${stderr.trim().slice(-800)}` : ''}`));
@@ -177,7 +180,7 @@ async function interactive(config) {
   readline.emitKeypressEvents(process.stdin); process.stdin.setRawMode(true); process.stdin.resume(); renderTui(model);
   let running = false;
   process.stdin.on('keypress', async (_, key) => {
-    if (key?.ctrl && key.name === 'c') { process.stdout.write(ansi.show + '\n'); process.exit(130); }
+    if (key?.ctrl && key.name === 'c') shutdown(130);
     if (key?.name === 'return') {
       const task = model.input.trim(); model.input = ''; if (!task || running) return; running = true; renderTui(model);
       try { await workflow(task, config, add); } catch {} finally { running = false; renderTui(model); }
@@ -186,6 +189,17 @@ async function interactive(config) {
     renderTui(model);
   });
 }
+
+function shutdown(code = 0) {
+  for (const child of activeChildren) {
+    try { child.kill('SIGTERM'); } catch {}
+  }
+  if (process.stdin.isTTY) process.stdin.setRawMode(false);
+  process.stdout.write(ansi.show + '\n');
+  process.exit(code);
+}
+
+process.on('SIGTERM', () => shutdown(143));
 
 async function main() {
   const config = loadConfig(); const [command, ...rest] = process.argv.slice(2);
