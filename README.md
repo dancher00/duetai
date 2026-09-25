@@ -12,6 +12,14 @@
   <code>Claude plans &amp; reviews</code> → <code>Codex implements &amp; fixes</code>
 </p>
 
+## Live demo
+
+<p align="center">
+  <img src="assets/duetai-demo.gif" alt="DuetAI live workflow demo" width="900">
+</p>
+
+This is a replay of a real successful run: Claude planned a repair, Codex implemented it and ran the tests, then Claude returned `VERDICT: PASS`. See the exact [models, reasoning settings, and token usage](docs/demo.md).
+
 DuetAI is a small, local-first terminal orchestrator for running Claude Code and Codex as a disciplined pair. Claude plans and reviews; Codex implements. Both are the official CLIs you already use, so your existing LLM Proxy configuration and credentials stay in place.
 
 ```text
