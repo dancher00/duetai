@@ -166,6 +166,7 @@ function snapshotSummary(snapshot) {
   const files = (snapshot?.status || '').split('\n').filter(Boolean).length;
   const stat = (snapshot?.diff || '').split('\n').filter(Boolean).at(-1) || '';
   if (!files && !stat) return 'no working-tree changes';
+  if (/\bfile(?:s)? changed\b/.test(stat)) return stat;
   return [files ? `${files} file${files === 1 ? '' : 's'} changed` : '', stat].filter(Boolean).join(' · ');
 }
 
