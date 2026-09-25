@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn, spawnSync } from 'node:child_process';
 import readline from 'node:readline';
+import { reviewNeedsFix } from '../src/verdict.js';
 
 const VERSION = '0.1.0';
 const activeChildren = new Set();
@@ -147,7 +148,7 @@ async function workflow(task, config, render = consoleRenderer) {
       state.phase = 'review'; event({ type: 'phase', phase: state.phase, agent: 'claude', round });
       const review = await runAgent('claude', `You are a meticulous senior reviewer. Do not edit files. Inspect the current git diff and verify the task. Return exactly: VERDICT (PASS or NEEDS_FIX), critical findings, suggested fixes, and tests to run.\n\nTASK:\n${task}\n\nLEAD PLAN:\n${state.outputs.plan}`, { ...config, claude: { ...config.claude, permissionMode: 'plan' } }, event);
       state.outputs.review = review.output; state.snapshot = gitSnapshot(); event({ type: 'phase.completed', phase: 'review', text: compact(review.output), snapshot: state.snapshot });
-      if (!/NEEDS_FIX|NEEDS FIX|FAIL/i.test(review.output)) break;
+      if (!reviewNeedsFix(review.output)) break;
       if (round === config.workflow.maxRounds) break;
     }
     if (config.workflow.runTests) { state.phase = 'tests'; event({ type: 'phase', phase: state.phase }); const result = spawnSync(config.workflow.testCommand, { cwd, shell: true, encoding: 'utf8' }); state.outputs.tests = (result.stdout || '') + (result.stderr || ''); event({ type: 'phase.completed', phase: state.phase, code: result.status, text: compact(state.outputs.tests) }); }
