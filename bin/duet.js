@@ -92,7 +92,7 @@ function runAgent(kind, prompt, config, onEvent) {
     const isCodex = kind === 'codex';
     const args = isCodex
       ? ['exec', '--profile', config.codex.profile, '--sandbox', config.codex.sandbox, '--json', prompt]
-      : ['-p', prompt, '--output-format', 'stream-json', '--permission-mode', config.claude.permissionMode];
+      : ['-p', prompt, '--verbose', '--output-format', 'stream-json', '--permission-mode', config.claude.permissionMode];
     const child = spawn(isCodex ? config.codex.command : config.claude.command, args, { cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
     activeChildren.add(child);
     let output = ''; let stderr = ''; let buffer = '';

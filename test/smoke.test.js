@@ -62,3 +62,8 @@ console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',tex
   assert.match(state.outputs.review, /VERDICT PASS/);
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
+
+test('includes verbose when using Claude stream-json output', () => {
+  const source = fs.readFileSync(cli, 'utf8');
+  assert.match(source, /--verbose.*--output-format.*stream-json/);
+});
