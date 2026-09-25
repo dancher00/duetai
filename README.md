@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/duetai-teaser.jpg" alt="DuetAI — Claude plans and reviews, Codex implements and fixes" width="900">
+  <img src="assets/duetai-teaser.svg" alt="DuetAI — Claude plans and reviews, Codex implements and fixes" width="900">
 </p>
 
 <p align="center">
