@@ -83,55 +83,12 @@ async function ensureInteractiveCredentials() {
   if (!sessionSecrets.codex || !sessionSecrets.claude) throw new Error('Both Codex and Claude API keys are required.');
 }
 
-function usage() {
-  console.log(`${color('cyan', 'DuetAI')} ${color('dim', `v${VERSION}`)}\n\n` +
-`  duet                         open the interactive workspace\n` +
-`  duet run "task"              run the Claude → Codex → review workflow\n` +
-`  duet run --compact "task"    show phases and verdict only\n` +
-`  duet run --verbose "task"    include raw agent and tool output\n` +
-`  duet resume                  continue the last saved task\n` +
-`  duet status                  show the last session\n` +
-`  duet doctor                  check local prerequisites\n` +
-`  duet init                    create a commented .duet.json\n` +
-`  duet --version               print version\n`);
-}
-
-function doctor() {
-  console.log(`${color('cyan', 'DuetAI doctor')}\n`);
-  const checks = [
-    ['node', process.version],
-    ['git', commandVersion('git', ['--version'])],
-    ['claude', commandVersion('claude', ['--version'])],
-    ['codex', commandVersion('codex', ['--version'])],
-    ['LLMPROXY_API_KEY', process.env.LLMPROXY_API_KEY ? 'set' : 'not set (duet will ask)'],
-    ['ANTHROPIC_API_KEY', process.env.ANTHROPIC_API_KEY ? 'set' : 'not set (duet will ask)']
-  ];
-  for (const [name, result] of checks) console.log(`  ${result ? color('green', '✓') : color('red', '✗')} ${name.padEnd(18)} ${result || 'missing'}`);
-  console.log(`\n  ${color('dim', `workspace: ${cwd}`)}`);
-}
-function commandVersion(cmd, args) { const r = spawnSync(cmd, args, { encoding: 'utf8' }); return r.status === 0 ? (r.stdout || r.stderr || '').trim().split('\n')[0] : ''; }
-
-function status() {
-  const s = loadState();
-  if (!s) return console.log(`${color('yellow', 'No DuetAI session yet.')} Run ${color('cyan', 'duet run "..."')}.`);
-  console.log(`${color('cyan', 'DuetAI session')} ${s.id}\n`);
-  console.log(`  task:    ${s.task}\n  phase:   ${s.phase}\n  round:   ${s.round}/${s.maxRounds}\n  started: ${s.startedAt}\n  updated: ${s.updatedAt}\n`);
-  console.log(`  ${color('dim', s.snapshot?.diff || 'No working-tree diff recorded.')}`);
-}
-
-function init() {
-  const file = path.join(cwd, '.duet.json');
-  if (fs.existsSync(file)) return console.log(`${color('yellow', 'Already exists:')} ${file}`);
-  fs.writeFileSync(file, JSON.stringify(defaultConfig, null, 2) + '\n');
-  console.log(`${color('green', 'Created')} ${file}`);
-}
-
 function runAgent(kind, prompt, config, onEvent) {
   return new Promise((resolve, reject) => {
     const isCodex = kind === 'codex';
     const args = isCodex
-      ? ['exec', '--profile', config.codex.profile, '--sandbox', config.codex.sandbox, '--json', ...(isGitRepository() ? [] : ['--skip-git-repo-check']), prompt]
-      : ['-p', prompt, '--verbose', '--output-format', 'stream-json', '--permission-mode', config.claude.permissionMode];
+      ? ['exec', '--profile', config.codex.profile, '--sandbox', config.codex.sandbox, ...(config.codex.model ? ['--model', config.codex.model] : []), '--json', ...(isGitRepository() ? [] : ['--skip-git-repo-check']), prompt]
+      : ['-p', prompt, '--verbose', '--output-format', 'stream-json', '--permission-mode', config.claude.permissionMode, ...(config.claude.model ? ['--model', config.claude.model] : [])];
     const { LLMPROXY_API_KEY: _codexKey, ANTHROPIC_API_KEY: _claudeKey, ...baseEnv } = process.env;
     const agentEnv = isCodex
       ? { ...baseEnv, ...(sessionSecrets.codex ? { LLMPROXY_API_KEY: sessionSecrets.codex } : {}) }
@@ -299,9 +256,9 @@ function createConsoleRenderer({ verbose = false, compactMode = false } = {}) {
 async function interactive(config) {
   await ensureInteractiveCredentials();
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: Boolean(process.stdin.isTTY) });
-  let mode = 'default';
+  let pending = null;
   console.log(`${color('cyan', 'DuetAI')} ${color('dim', `v${VERSION} · ${cwd}`)}`);
-  console.log(color('dim', 'Claude plans and reviews · Codex implements · /exit to quit\n'));
+  console.log(color('dim', 'Claude leads · Codex implements · /resume · /permissions · /model · /exit\n'));
   rl.setPrompt(`${color('cyan', '›')} `);
   rl.prompt();
   rl.on('SIGINT', () => shutdown(130));
@@ -315,12 +272,47 @@ async function interactive(config) {
   process.stdin.on('keypress', onKeypress);
   for await (const input of rl) {
     const task = input.trim();
+    if (pending?.type === 'permissions') {
+      const modes = {
+        '1': ['safe', 'plan', 'read-only'], safe: ['safe', 'plan', 'read-only'],
+        '2': ['workspace', 'acceptEdits', 'workspace-write'], workspace: ['workspace', 'acceptEdits', 'workspace-write'],
+        '3': ['full', 'bypassPermissions', 'danger-full-access'], full: ['full', 'bypassPermissions', 'danger-full-access']
+      };
+      const selected = modes[task.toLowerCase()];
+      if (selected) {
+        config.claude.permissionMode = selected[1]; config.codex.sandbox = selected[2];
+        console.log(color('green', `Permissions: ${selected[0]}`));
+      } else console.log(color('yellow', 'Permissions unchanged.'));
+      pending = null; rl.setPrompt(`${color('cyan', '›')} `); rl.prompt(); continue;
+    }
+    if (pending?.type === 'claude-model') {
+      if (task) config.claude.model = task.toLowerCase() === 'default' ? undefined : task;
+      pending = { type: 'codex-model' };
+      rl.setPrompt(`${color('green', 'Codex model')} ${color('dim', `[${config.codex.model || 'profile default'}]`)} › `); rl.prompt(); continue;
+    }
+    if (pending?.type === 'codex-model') {
+      if (task) config.codex.model = task.toLowerCase() === 'default' ? undefined : task;
+      console.log(`${color('magenta', 'Claude')}: ${config.claude.model || 'default'} · ${color('green', 'Codex')}: ${config.codex.model || 'profile default'}`);
+      pending = null; rl.setPrompt(`${color('cyan', '›')} `); rl.prompt(); continue;
+    }
     if (!task) { rl.prompt(); continue; }
     if (['/exit', '/quit'].includes(task)) break;
-    if (task === '/compact') { mode = 'compact'; console.log(color('dim', 'Compact output enabled.')); rl.prompt(); continue; }
-    if (task === '/verbose') { mode = 'verbose'; console.log(color('dim', 'Verbose output enabled.')); rl.prompt(); continue; }
-    if (task === '/default') { mode = 'default'; console.log(color('dim', 'Useful reports enabled.')); rl.prompt(); continue; }
-    try { await workflow(task, config, createConsoleRenderer({ verbose: mode === 'verbose', compactMode: mode === 'compact' })); }
+    if (task === '/permissions') {
+      console.log(`  1  safe       ${color('dim', 'read-only')}\n  2  workspace  ${color('dim', 'edit current project')}\n  3  full       ${color('dim', 'unrestricted')}`);
+      pending = { type: 'permissions' }; rl.setPrompt(`${color('yellow', 'Permissions')} › `); rl.prompt(); continue;
+    }
+    if (task === '/model') {
+      pending = { type: 'claude-model' };
+      rl.setPrompt(`${color('magenta', 'Claude model')} ${color('dim', `[${config.claude.model || 'default'}]`)} › `); rl.prompt(); continue;
+    }
+    if (task === '/resume') {
+      const previous = loadState();
+      if (!previous?.task) { console.log(color('yellow', 'Nothing to resume.')); rl.prompt(); continue; }
+      const continuation = `Continue the previous task.\n\nORIGINAL TASK:\n${previous.task}\n\nPREVIOUS RESULT OR REVIEW:\n${previous.outputs?.review || previous.outputs?.response || previous.error || 'No result recorded.'}`;
+      try { await workflow(continuation, config, createConsoleRenderer()); } catch {}
+      console.log(); rl.prompt(); continue;
+    }
+    try { await workflow(task, config, createConsoleRenderer()); }
     catch {}
     console.log();
     rl.prompt();
@@ -341,15 +333,8 @@ function shutdown(code = 0) {
 process.on('SIGTERM', () => shutdown(143));
 
 async function main() {
-  const config = loadConfig(); const [command, ...rest] = process.argv.slice(2);
-  if (command === '--version' || command === '-v') return console.log(VERSION);
-  if (command === 'doctor') return doctor();
-  if (command === 'status') return status();
-  if (command === 'init') return init();
-  if (command === 'run') { const verbose = rest.includes('--verbose'); const compactMode = rest.includes('--compact'); const task = rest.filter(x => !['--verbose', '--compact'].includes(x)).join(' ').trim(); if (!task) return usage(); await workflow(task, config, createConsoleRenderer({ verbose, compactMode })); return; }
-  if (command === 'resume') { const verbose = rest.includes('--verbose'); const compactMode = rest.includes('--compact'); const s = loadState(); if (!s?.task) return console.log('No resumable session.'); await workflow(`Continue the previous task. Original task:\n${s.task}\nPrevious review:\n${s.outputs?.review || ''}`, config, createConsoleRenderer({ verbose, compactMode })); return; }
-  if (command && command !== 'tui') return usage();
-  await interactive(config);
+  if (process.argv.length > 2) throw new Error('Run DuetAI without arguments: duet');
+  await interactive(loadConfig());
 }
 
 main().catch((e) => { console.error(color('red', `DuetAI: ${e.message}`)); process.exitCode = 1; });

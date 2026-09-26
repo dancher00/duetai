@@ -18,7 +18,7 @@ DuetAI is a small, local-first terminal orchestrator for running Claude Code and
 
 [▶ Watch the terminal demo (MP4)](assets/duetai-demo.mp4)
 
-The recording shows installation, `duet doctor`, a deliberately failing test, the Claude → Codex → Claude workflow, and the final green test run.
+The recording shows installation, a deliberately failing test, the Claude → Codex → Claude workflow, and the final green test run.
 
 ```text
 task → Claude plan → Codex implementation → Claude review → Codex fixes
@@ -33,14 +33,14 @@ git clone https://github.com/dancher00/duetai.git
 cd duetai
 npm link
 cd /path/to/your/project
-duet doctor
 duet
 ```
 
 Or run without installing:
 
 ```bash
-node /path/to/DuetAI/bin/duet.js run "Add OAuth authentication and tests"
+cd /path/to/your/project
+node /path/to/DuetAI/bin/duet.js
 ```
 
 ## Your LLM Proxy setup
@@ -57,27 +57,23 @@ duet
 
 Codex is launched with `codex exec --profile llm-proxy-cu --sandbox workspace-write --json`. Claude Code uses its existing `~/.claude/settings.json` configuration.
 
-## Commands
+## Inside DuetAI
 
-```bash
-duet                         # open the interactive terminal prompt
-duet run "your task"         # show useful plan, implementation, and review reports
-duet run --compact "task"     # show phases and verdict only
-duet run --verbose "task"     # include raw agent/tool output
-duet resume                  # continue the saved task
-duet status                  # inspect the latest session
-duet doctor                  # check prerequisites
-duet init                    # create .duet.json
+```text
+/resume       continue the previous task
+/permissions  choose safe, workspace, or full access
+/model        choose Claude and Codex models for this session
+/exit         quit
 ```
 
-Running `duet` opens a normal terminal prompt. Enter a task, wait for the pair to finish, then enter the next task. Use `/compact`, `/verbose`, or `/default` to change the output mode and `/exit` to quit. `Esc` cancels the active request (or exits from an idle prompt); `Ctrl-C` exits immediately and stops child agents. DuetAI also works outside a Git repository; Codex is started with its non-repository check disabled in that case.
+Running `duet` opens a normal terminal prompt. Enter a task, wait for the pair to finish, then enter the next task. `Esc` cancels the active request (or exits from an idle prompt); `Ctrl-C` exits immediately and stops child agents. DuetAI also works outside a Git repository; Codex is started with its non-repository check disabled in that case.
 If `LLMPROXY_API_KEY` or `ANTHROPIC_API_KEY` is missing, interactive startup asks separately for the Codex and Claude keys using hidden input. The values live only in the DuetAI process: each CLI receives only its own key, and neither key is written to session files. Claude is the lead agent: it answers ordinary conversation itself and explicitly selects `DUET` mode only when Codex implementation and Claude review are useful.
 
-The default output shows the useful result of each role: Claude's concrete plan, Codex's implementation decisions and validation, and Claude's review. It does not print internal provider diagnostics or every tool event. This reuses text the agents already produced, so displaying it does not make an additional model request. Use `--compact` for phases and verdict only, or `--verbose` for the raw agent/tool stream. Full structured events are always saved under `.duet/`. `Ctrl-C` stops the current agent subprocesses.
+The output shows the useful result of each role: Claude's concrete plan, Codex's implementation decisions and validation, and Claude's review. It does not print internal provider diagnostics or every tool event. Full structured events are saved under `.duet/`.
 
 ## Configuration
 
-Run `duet init` to create `.duet.json`, or copy `.duet.example.json`. The configuration is project-local and is safe to commit except for any custom command that might contain secrets. Session state and event logs are stored in `.duet/`, which is ignored by Git.
+Configuration is optional. Copy `.duet.example.json` to `.duet.json` only if the project needs custom defaults. Session state and event logs are stored in `.duet/`, which should be ignored by Git.
 
 ## Safety
 
