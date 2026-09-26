@@ -10,9 +10,10 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cli = path.join(root, 'bin', 'duet.js');
 
 test('opens and exits the interactive prompt', () => {
-  const result = spawnSync(process.execPath, [cli], { cwd: root, input: '/exit\n', encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [cli], { cwd: root, input: '/\n/exit\n', encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Claude leads.*Codex implements/s);
+  assert.match(result.stdout, /Commands.*\/resume.*\/permissions.*\/model.*\/exit/s);
 });
 
 test('completes a mocked Claude and Codex workflow', () => {

@@ -24,6 +24,25 @@ const defaultConfig = {
   workflow: { lead: 'claude', maxRounds: 2, runTests: false, testCommand: 'npm test' },
   ui: { maxEvents: 160 }
 };
+const slashCommands = [
+  ['/resume', 'continue the previous task'],
+  ['/permissions', 'choose agent access level'],
+  ['/model', 'choose Claude and Codex models'],
+  ['/exit', 'quit DuetAI']
+];
+const modelSuggestions = {
+  claude: [
+    ['default', 'use Claude Code default'],
+    ['sonnet', 'balanced Claude model'],
+    ['opus', 'strongest Claude model'],
+    ['haiku', 'fast Claude model']
+  ],
+  codex: [
+    ['default', 'use the configured Codex profile'],
+    ['gpt-5.6-sol', 'GPT-5.6 Sol'],
+    ['gpt-6-sol', 'GPT-6 Sol']
+  ]
+};
 
 const ansi = {
   reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m', cyan: '\x1b[36m', blue: '\x1b[34m',
@@ -81,6 +100,30 @@ function claudeHasKeyHelper() {
     const settings = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8'));
     return typeof settings.apiKeyHelper === 'string' && settings.apiKeyHelper.trim().length > 0;
   } catch { return false; }
+}
+
+function completeSlashCommand(line) {
+  if (!line.startsWith('/')) return [[], line];
+  const hits = slashCommands
+    .filter(([command]) => command.startsWith(line))
+    .map(([command]) => command);
+  return [hits.length ? hits : slashCommands.map(([command]) => command), line];
+}
+
+function printSlashHints() {
+  console.log(color('dim', '  Commands (Tab completes):'));
+  for (const [command, description] of slashCommands) {
+    console.log(`  ${color('cyan', command.padEnd(14))} ${color('dim', description)}`);
+  }
+}
+
+function printModelHints(kind, current) {
+  const title = kind === 'claude' ? 'Claude model' : 'Codex model';
+  console.log(color('dim', `${title} · choose a number, alias, or type a custom model:`));
+  modelSuggestions[kind].forEach(([value, description], index) => {
+    const selected = (current || 'default').toLowerCase() === value;
+    console.log(`  ${color('cyan', String(index + 1).padEnd(3))}${value.padEnd(14)} ${color('dim', description)}${selected ? color('green', '  ✓') : ''}`);
+  });
 }
 
 async function ensureInteractiveCredentials() {
@@ -262,23 +305,40 @@ function createConsoleRenderer({ verbose = false, compactMode = false } = {}) {
 
 async function interactive(config) {
   await ensureInteractiveCredentials();
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: Boolean(process.stdin.isTTY) });
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: Boolean(process.stdin.isTTY), completer: completeSlashCommand });
   let pending = null;
   console.log(`${color('cyan', 'DuetAI')} ${color('dim', `v${VERSION} · ${cwd}`)}`);
-  console.log(color('dim', 'Claude leads · Codex implements · /resume · /permissions · /model · /exit\n'));
+  console.log(color('dim', 'Claude leads · Codex implements'));
+  console.log(color('dim', 'Type / for commands · Tab completes · Esc exits\n'));
   rl.setPrompt(`${color('cyan', '›')} `);
   rl.prompt();
   rl.on('SIGINT', () => shutdown(130));
-  const onKeypress = (_text, key) => {
-    if (key?.name !== 'escape') return;
-    if (activeChildren.size) {
-      cancellationRequested = true;
-      for (const child of activeChildren) { try { child.kill('SIGTERM'); } catch {} }
-    } else shutdown(0);
+  let slashHintsShown = false;
+  const onKeypress = (text, key) => {
+    if (key?.name === 'escape') {
+      if (activeChildren.size) {
+        cancellationRequested = true;
+        for (const child of activeChildren) { try { child.kill('SIGTERM'); } catch {} }
+      } else shutdown(0);
+      return;
+    }
+    if (!pending && text === '/' && !slashHintsShown) {
+      setImmediate(() => {
+        if (rl.line !== '/') return;
+        slashHintsShown = true;
+        process.stdout.write('\n');
+        printSlashHints();
+        rl._refreshLine?.();
+      });
+    } else if (key?.name === 'backspace' || (text && text !== '/')) {
+      slashHintsShown = false;
+    }
   };
   process.stdin.on('keypress', onKeypress);
   for await (const input of rl) {
     const task = input.trim();
+    const showedSlashHints = slashHintsShown;
+    slashHintsShown = false;
     if (pending?.type === 'permissions') {
       const modes = {
         '1': ['safe', 'plan', 'read-only'], safe: ['safe', 'plan', 'read-only'],
@@ -293,12 +353,15 @@ async function interactive(config) {
       pending = null; rl.setPrompt(`${color('cyan', '›')} `); rl.prompt(); continue;
     }
     if (pending?.type === 'claude-model') {
-      if (task) config.claude.model = task.toLowerCase() === 'default' ? undefined : task;
+      const choice = modelSuggestions.claude[Number(task) - 1]?.[0] || task;
+      if (choice) config.claude.model = choice.toLowerCase() === 'default' ? undefined : choice;
       pending = { type: 'codex-model' };
+      printModelHints('codex', config.codex.model || 'default');
       rl.setPrompt(`${color('green', 'Codex model')} ${color('dim', `[${config.codex.model || 'profile default'}]`)} › `); rl.prompt(); continue;
     }
     if (pending?.type === 'codex-model') {
-      if (task) config.codex.model = task.toLowerCase() === 'default' ? undefined : task;
+      const choice = modelSuggestions.codex[Number(task) - 1]?.[0] || task;
+      if (choice) config.codex.model = choice.toLowerCase() === 'default' ? undefined : choice;
       console.log(`${color('magenta', 'Claude')}: ${config.claude.model || 'default'} · ${color('green', 'Codex')}: ${config.codex.model || 'profile default'}`);
       pending = null; rl.setPrompt(`${color('cyan', '›')} `); rl.prompt(); continue;
     }
@@ -310,7 +373,13 @@ async function interactive(config) {
     }
     if (task === '/model') {
       pending = { type: 'claude-model' };
+      printModelHints('claude', config.claude.model || 'default');
       rl.setPrompt(`${color('magenta', 'Claude model')} ${color('dim', `[${config.claude.model || 'default'}]`)} › `); rl.prompt(); continue;
+    }
+    if (task === '/' && !showedSlashHints) {
+      printSlashHints();
+      rl.prompt();
+      continue;
     }
     if (task === '/resume') {
       const previous = loadState();

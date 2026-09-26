@@ -67,6 +67,7 @@ Codex is launched with `codex exec --profile llm-proxy-cu --sandbox workspace-wr
 ```
 
 Running `duet` opens a normal terminal prompt. Enter a task, wait for the pair to finish, then enter the next task. `Esc` cancels the active request (or exits from an idle prompt); `Ctrl-C` exits immediately and stops child agents. DuetAI also works outside a Git repository; Codex is started with its non-repository check disabled in that case.
+Type `/` to open command hints; press `Tab` to complete a slash command. `/model` shows selectable Claude and Codex model suggestions and still accepts a custom model name.
 If `LLMPROXY_API_KEY` or `ANTHROPIC_API_KEY` is missing, interactive startup asks separately for the Codex and Claude keys using hidden input. The values live only in the DuetAI process: each CLI receives only its own key, and neither key is written to session files. Claude is the lead agent: it answers ordinary conversation itself and explicitly selects `DUET` mode only when Codex implementation and Claude review are useful.
 
 The output shows the useful result of each role: Claude's concrete plan, Codex's implementation decisions and validation, and Claude's review. It does not print internal provider diagnostics or every tool event. Full structured events are saved under `.duet/`.
