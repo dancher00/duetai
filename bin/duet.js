@@ -9,6 +9,7 @@ import { reviewNeedsFix } from '../src/verdict.js';
 
 const VERSION = '0.1.0';
 const activeChildren = new Set();
+let cancellationRequested = false;
 const cwd = process.cwd();
 const stateDir = path.join(cwd, '.duet');
 const stateFile = path.join(stateDir, 'session.json');
@@ -66,7 +67,7 @@ async function promptSecret(label) {
       process.stdout.write('\n');
     };
     const onKey = (text, key) => {
-      if (key?.ctrl && key.name === 'c') { finish(); reject(new Error('Credential entry cancelled.')); return; }
+      if ((key?.ctrl && key.name === 'c') || key?.name === 'escape') { finish(); reject(new Error('Credential entry cancelled.')); return; }
       if (key?.name === 'return' || key?.name === 'enter') { finish(); resolve(value.trim()); return; }
       if (key?.name === 'backspace') { value = value.slice(0, -1); return; }
       if (text && !key?.ctrl && !key?.meta) value += text;
@@ -158,6 +159,7 @@ function runAgent(kind, prompt, config, onEvent) {
       activeChildren.delete(child);
       if (buffer.trim()) { output += `${output ? '\n' : ''}${buffer.trim()}`; messages.push(buffer.trim()); emit({ type: 'stream', text: buffer }); }
       const finalOutput = messages.at(-1) || output.trim();
+      if (cancellationRequested) { cancellationRequested = false; reject(new Error('Cancelled.')); return; }
       if (code === 0) resolve({ output: finalOutput, stderr: stderr.trim() });
       else reject(new Error(`${kind} exited with ${signal || `code ${code}`}${stderr ? `: ${stderr.trim().slice(-800)}` : ''}`));
     });
@@ -303,6 +305,14 @@ async function interactive(config) {
   rl.setPrompt(`${color('cyan', '›')} `);
   rl.prompt();
   rl.on('SIGINT', () => shutdown(130));
+  const onKeypress = (_text, key) => {
+    if (key?.name !== 'escape') return;
+    if (activeChildren.size) {
+      cancellationRequested = true;
+      for (const child of activeChildren) { try { child.kill('SIGTERM'); } catch {} }
+    } else shutdown(0);
+  };
+  process.stdin.on('keypress', onKeypress);
   for await (const input of rl) {
     const task = input.trim();
     if (!task) { rl.prompt(); continue; }
@@ -310,13 +320,12 @@ async function interactive(config) {
     if (task === '/compact') { mode = 'compact'; console.log(color('dim', 'Compact output enabled.')); rl.prompt(); continue; }
     if (task === '/verbose') { mode = 'verbose'; console.log(color('dim', 'Verbose output enabled.')); rl.prompt(); continue; }
     if (task === '/default') { mode = 'default'; console.log(color('dim', 'Useful reports enabled.')); rl.prompt(); continue; }
-    rl.pause();
     try { await workflow(task, config, createConsoleRenderer({ verbose: mode === 'verbose', compactMode: mode === 'compact' })); }
     catch {}
-    rl.resume();
     console.log();
     rl.prompt();
   }
+  process.stdin.off('keypress', onKeypress);
   rl.close();
 }
 
