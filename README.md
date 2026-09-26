@@ -49,8 +49,11 @@ DuetAI does not receive or store API keys. It starts the local CLIs as child pro
 
 ```bash
 export LLMPROXY_API_KEY="your-key"
+export ANTHROPIC_API_KEY="your-claude-key"
 duet
 ```
+
+`LLMPROXY_API_KEY` is passed only to Codex. `ANTHROPIC_API_KEY` is passed only to Claude Code. If either variable is missing when running the interactive `duet`, it is requested with hidden input.
 
 Codex is launched with `codex exec --profile llm-proxy-cu --sandbox workspace-write --json`. Claude Code uses its existing `~/.claude/settings.json` configuration.
 
@@ -68,6 +71,7 @@ duet init                    # create .duet.json
 ```
 
 Running `duet` opens a normal terminal prompt. Enter a task, wait for the pair to finish, then enter the next task. Use `/compact`, `/verbose`, or `/default` to change the output mode and `/exit` to quit. DuetAI also works outside a Git repository; Codex is started with its non-repository check disabled in that case.
+If `LLMPROXY_API_KEY` or `ANTHROPIC_API_KEY` is missing, interactive startup asks separately for the Codex and Claude keys using hidden input. The values live only in the DuetAI process: each CLI receives only its own key, and neither key is written to session files. Claude is the lead agent: it answers ordinary conversation itself and explicitly selects `DUET` mode only when Codex implementation and Claude review are useful.
 
 The default output shows the useful result of each role: Claude's concrete plan, Codex's implementation decisions and validation, and Claude's review. It does not print internal provider diagnostics or every tool event. This reuses text the agents already produced, so displaying it does not make an additional model request. Use `--compact` for phases and verdict only, or `--verbose` for the raw agent/tool stream. Full structured events are always saved under `.duet/`. `Ctrl-C` stops the current agent subprocesses.
 

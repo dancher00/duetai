@@ -13,6 +13,10 @@ const cwd = process.cwd();
 const stateDir = path.join(cwd, '.duet');
 const stateFile = path.join(stateDir, 'session.json');
 const eventFile = path.join(stateDir, 'events.jsonl');
+const sessionSecrets = {
+  codex: process.env.LLMPROXY_API_KEY || '',
+  claude: process.env.ANTHROPIC_API_KEY || ''
+};
 const defaultConfig = {
   codex: { command: 'codex', profile: 'llm-proxy-cu', sandbox: 'workspace-write' },
   claude: { command: 'claude', permissionMode: 'acceptEdits' },
@@ -49,6 +53,35 @@ function git(args) { const r = spawnSync('git', args, { cwd, encoding: 'utf8' })
 function gitSnapshot() { return { branch: git(['branch', '--show-current']), status: git(['status', '--short']), diff: git(['diff', '--stat']) }; }
 function isGitRepository() { return spawnSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd, stdio: 'ignore' }).status === 0; }
 
+async function promptSecret(label) {
+  process.stdout.write(label);
+  readline.emitKeypressEvents(process.stdin);
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  return new Promise((resolve, reject) => {
+    let value = '';
+    const finish = () => {
+      process.stdin.off('keypress', onKey);
+      process.stdin.setRawMode(false);
+      process.stdout.write('\n');
+    };
+    const onKey = (text, key) => {
+      if (key?.ctrl && key.name === 'c') { finish(); reject(new Error('Credential entry cancelled.')); return; }
+      if (key?.name === 'return' || key?.name === 'enter') { finish(); resolve(value.trim()); return; }
+      if (key?.name === 'backspace') { value = value.slice(0, -1); return; }
+      if (text && !key?.ctrl && !key?.meta) value += text;
+    };
+    process.stdin.on('keypress', onKey);
+  });
+}
+
+async function ensureInteractiveCredentials() {
+  if (!process.stdin.isTTY) return;
+  if (!sessionSecrets.codex) sessionSecrets.codex = await promptSecret('Codex API key: ');
+  if (!sessionSecrets.claude) sessionSecrets.claude = await promptSecret('Claude API key: ');
+  if (!sessionSecrets.codex || !sessionSecrets.claude) throw new Error('Both Codex and Claude API keys are required.');
+}
+
 function usage() {
   console.log(`${color('cyan', 'DuetAI')} ${color('dim', `v${VERSION}`)}\n\n` +
 `  duet                         open the interactive workspace\n` +
@@ -69,7 +102,8 @@ function doctor() {
     ['git', commandVersion('git', ['--version'])],
     ['claude', commandVersion('claude', ['--version'])],
     ['codex', commandVersion('codex', ['--version'])],
-    ['LLMPROXY_API_KEY', process.env.LLMPROXY_API_KEY ? 'set' : 'not set (Codex may use saved login)']
+    ['LLMPROXY_API_KEY', process.env.LLMPROXY_API_KEY ? 'set' : 'not set (duet will ask)'],
+    ['ANTHROPIC_API_KEY', process.env.ANTHROPIC_API_KEY ? 'set' : 'not set (duet will ask)']
   ];
   for (const [name, result] of checks) console.log(`  ${result ? color('green', '✓') : color('red', '✗')} ${name.padEnd(18)} ${result || 'missing'}`);
   console.log(`\n  ${color('dim', `workspace: ${cwd}`)}`);
@@ -97,7 +131,11 @@ function runAgent(kind, prompt, config, onEvent) {
     const args = isCodex
       ? ['exec', '--profile', config.codex.profile, '--sandbox', config.codex.sandbox, '--json', ...(isGitRepository() ? [] : ['--skip-git-repo-check']), prompt]
       : ['-p', prompt, '--verbose', '--output-format', 'stream-json', '--permission-mode', config.claude.permissionMode];
-    const child = spawn(isCodex ? config.codex.command : config.claude.command, args, { cwd, env: process.env, stdio: [process.stdin.isTTY ? 'inherit' : 'ignore', 'pipe', 'pipe'] });
+    const { LLMPROXY_API_KEY: _codexKey, ANTHROPIC_API_KEY: _claudeKey, ...baseEnv } = process.env;
+    const agentEnv = isCodex
+      ? { ...baseEnv, ...(sessionSecrets.codex ? { LLMPROXY_API_KEY: sessionSecrets.codex } : {}) }
+      : { ...baseEnv, ...(sessionSecrets.claude ? { ANTHROPIC_API_KEY: sessionSecrets.claude } : {}) };
+    const child = spawn(isCodex ? config.codex.command : config.claude.command, args, { cwd, env: agentEnv, stdio: [process.stdin.isTTY ? 'inherit' : 'ignore', 'pipe', 'pipe'] });
     activeChildren.add(child);
     let output = ''; let stderr = ''; let buffer = ''; const messages = [];
     const emit = (event) => { onEvent?.({ agent: kind, ...event }); };
@@ -146,8 +184,15 @@ async function workflow(task, config, render = createConsoleRenderer()) {
   saveState(state); appendEvent({ type: 'session.started', task });
   const event = (e) => { state.updatedAt = now(); appendEvent(e); render(e, state); saveState(state); };
   try {
-    state.phase = 'planning'; event({ type: 'phase', phase: state.phase, agent: 'claude' });
-    const plan = await runAgent('claude', `You are the lead architect in DuetAI. Do not edit files. Inspect the repository and return a concrete plan for the task. Your final response must be useful in a terminal and no longer than 12 lines. Use exactly these headings: PLAN, FILES, ACCEPTANCE, RISKS, TESTS. Prefer specific file paths and commands; do not narrate tool calls.\n\nTASK:\n${task}`, config, event);
+    state.phase = 'lead'; event({ type: 'phase', phase: state.phase, agent: 'claude' });
+    const plan = await runAgent('claude', `You are the lead agent and router in DuetAI. Decide whether to answer by yourself or bring in Codex.\n\nFor conversation, greetings, general questions, explanations, and advice: do not inspect files and do not call tools. Return exactly:\nMODE: CHAT\nRESPONSE: <a direct, natural answer>\n\nOnly when the request requires implementation, file changes, tests, debugging, or a second coding agent: inspect the workspace but do not edit it. Return MODE: DUET, then a concrete plan no longer than 12 lines using the headings PLAN, FILES, ACCEPTANCE, RISKS, TESTS. Prefer specific paths and commands; do not narrate tool calls. Codex will implement your plan and you will review its work.\n\nUSER MESSAGE:\n${task}`, config, event);
+    if (!/^MODE:\s*DUET\b/im.test(plan.output)) {
+      const response = plan.output.replace(/^MODE:\s*CHAT\s*/im, '').replace(/^RESPONSE:\s*/im, '').trim();
+      state.phase = 'complete'; state.outputs.response = response; state.updatedAt = now(); saveState(state);
+      appendEvent({ type: 'session.completed', mode: 'chat' }); render({ type: 'chat', text: response }, state); return state;
+    }
+    plan.output = plan.output.replace(/^MODE:\s*DUET\s*/im, '').trim();
+    state.phase = 'planning';
     state.outputs.plan = plan.output; event({ type: 'phase.completed', phase: 'planning', text: compact(plan.output) });
     for (let round = 1; round <= config.workflow.maxRounds; round++) {
       state.round = round; state.phase = 'implementation'; event({ type: 'phase', phase: state.phase, agent: 'codex', round });
@@ -165,7 +210,7 @@ async function workflow(task, config, render = createConsoleRenderer()) {
 }
 
 function phaseLabel(phase, agent) {
-  const labels = { planning: 'Claude is preparing the plan', implementation: 'Codex is implementing', review: 'Claude is reviewing', tests: 'Running final tests' };
+  const labels = { lead: 'Claude is thinking', planning: 'Claude is preparing the plan', implementation: 'Codex is implementing', review: 'Claude is reviewing', tests: 'Running final tests' };
   return labels[phase] || (agent ? `${agent} · ${phase}` : phase);
 }
 
@@ -202,13 +247,6 @@ function printReport(agent, title, text, shade, maxLines) {
   if (!report) return;
   console.log(`\n  ${color(shade, agent)} ${color('dim', '·')} ${color('bold', title)}`);
   for (const line of report.split('\n')) console.log(`  ${color('dim', '│')} ${line}`);
-}
-
-function casualReply(input) {
-  const text = input.toLowerCase().replace(/[!?.]+$/g, '').trim();
-  if (['hi', 'hello', 'hey', 'привет', 'здравствуй', 'здравствуйте'].includes(text)) return 'Привет! Что будем делать?';
-  if (['help', '/help', 'помощь', 'что ты умеешь'].includes(text)) return 'Опиши задачу обычным текстом. Claude составит план, Codex выполнит его, затем Claude проверит результат.';
-  return '';
 }
 
 function createConsoleRenderer({ verbose = false, compactMode = false } = {}) {
@@ -251,11 +289,13 @@ function createConsoleRenderer({ verbose = false, compactMode = false } = {}) {
       console.log(`  ${snapshotSummary(state.snapshot)}`);
       console.log(`  review: ${reviewVerdict(state.outputs?.review)} · rounds: ${state.round}/${state.maxRounds} · duration: ${elapsed(state)}`);
       console.log(`  ${color('dim', 'details: .duet/session.json · raw events: .duet/events.jsonl')}`);
+    } else if (e.type === 'chat') { stopSpinner(); console.log(e.text);
     } else if (e.type === 'error') { stopSpinner(); console.error(`\n${color('red', '✗ ' + e.text)}`); }
   };
 }
 
 async function interactive(config) {
+  await ensureInteractiveCredentials();
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: Boolean(process.stdin.isTTY) });
   let mode = 'default';
   console.log(`${color('cyan', 'DuetAI')} ${color('dim', `v${VERSION} · ${cwd}`)}`);
@@ -270,8 +310,6 @@ async function interactive(config) {
     if (task === '/compact') { mode = 'compact'; console.log(color('dim', 'Compact output enabled.')); rl.prompt(); continue; }
     if (task === '/verbose') { mode = 'verbose'; console.log(color('dim', 'Verbose output enabled.')); rl.prompt(); continue; }
     if (task === '/default') { mode = 'default'; console.log(color('dim', 'Useful reports enabled.')); rl.prompt(); continue; }
-    const reply = casualReply(task);
-    if (reply) { console.log(reply); rl.prompt(); continue; }
     rl.pause();
     try { await workflow(task, config, createConsoleRenderer({ verbose: mode === 'verbose', compactMode: mode === 'compact' })); }
     catch {}
