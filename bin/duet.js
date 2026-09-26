@@ -76,11 +76,18 @@ async function promptSecret(label) {
   });
 }
 
+function claudeHasKeyHelper() {
+  try {
+    const settings = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8'));
+    return typeof settings.apiKeyHelper === 'string' && settings.apiKeyHelper.trim().length > 0;
+  } catch { return false; }
+}
+
 async function ensureInteractiveCredentials() {
   if (!process.stdin.isTTY) return;
   if (!sessionSecrets.codex) sessionSecrets.codex = await promptSecret('Codex API key: ');
-  if (!sessionSecrets.claude) sessionSecrets.claude = await promptSecret('Claude API key: ');
-  if (!sessionSecrets.codex || !sessionSecrets.claude) throw new Error('Both Codex and Claude API keys are required.');
+  if (!sessionSecrets.claude && !claudeHasKeyHelper()) sessionSecrets.claude = await promptSecret('Claude API key: ');
+  if (!sessionSecrets.codex || (!sessionSecrets.claude && !claudeHasKeyHelper())) throw new Error('Codex and Claude credentials are required.');
 }
 
 function runAgent(kind, prompt, config, onEvent) {

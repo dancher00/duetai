@@ -53,7 +53,7 @@ export ANTHROPIC_API_KEY="your-claude-key"
 duet
 ```
 
-`LLMPROXY_API_KEY` is passed only to Codex. `ANTHROPIC_API_KEY` is passed only to Claude Code. If either variable is missing when running the interactive `duet`, it is requested with hidden input.
+`LLMPROXY_API_KEY` is passed only to Codex. `ANTHROPIC_API_KEY` is passed only to Claude Code. Missing credentials are requested with hidden input; an existing Claude Code `apiKeyHelper` is detected and reused without asking again.
 
 Codex is launched with `codex exec --profile llm-proxy-cu --sandbox workspace-write --json`. Claude Code uses its existing `~/.claude/settings.json` configuration.
 
