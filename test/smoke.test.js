@@ -79,10 +79,13 @@ require('node:fs').writeFileSync('codex-was-called', 'yes');
 `);
   fs.chmodSync(claude, 0o755); fs.chmodSync(codex, 0o755);
   fs.writeFileSync(path.join(sandbox, '.duet.json'), JSON.stringify({ claude: { command: claude }, codex: { command: codex } }));
-  const result = spawnSync(process.execPath, [cli], { cwd: sandbox, input: 'How are you?\n/exit\n', encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [cli], { cwd: sandbox, input: '/wat\nHow are you?\n/resume\n/exit\n', encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Unknown command: \/wat/);
   assert.match(result.stdout, /I am doing well/);
+  assert.match(result.stdout, /Nothing to resume/);
   assert.equal(fs.existsSync(path.join(sandbox, 'codex-was-called')), false);
+  assert.equal(fs.existsSync(path.join(sandbox, '.duet', 'last-duet.json')), false);
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
@@ -138,7 +141,7 @@ console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',tex
     claude: { command: claude }, codex: { command: codex }, workflow: { maxRounds: 1 }
   }));
   spawnSync('git', ['init', '-q'], { cwd: sandbox });
-  const input = '/permissions\n3\n/model\nclaude-test\ncodex-test\nBuild it\n/resume\n/exit\n';
+  const input = '/permissions\n3\n/model\nclaude-test\ncodex-test\nBuild it\n/res\n/exit\n';
   const result = spawnSync(process.execPath, [cli], { cwd: sandbox, input, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Permissions: full/);
@@ -147,5 +150,6 @@ console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',tex
   assert.ok(claudeCalls.every(args => args.includes('claude-test')));
   assert.equal(codexCalls.length, 2);
   assert.ok(codexCalls.every(args => args.includes('codex-test') && args.includes('danger-full-access')));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(sandbox, '.duet', 'last-duet.json'), 'utf8')).phase, 'complete');
   fs.rmSync(sandbox, { recursive: true, force: true });
 });

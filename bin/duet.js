@@ -13,6 +13,7 @@ let cancellationRequested = false;
 const cwd = process.cwd();
 const stateDir = path.join(cwd, '.duet');
 const stateFile = path.join(stateDir, 'session.json');
+const resumeFile = path.join(stateDir, 'last-duet.json');
 const eventFile = path.join(stateDir, 'events.jsonl');
 const sessionSecrets = {
   codex: process.env.LLMPROXY_API_KEY || '',
@@ -67,7 +68,8 @@ function loadConfig() {
 
 function ensureState() { fs.mkdirSync(stateDir, { recursive: true }); }
 function saveState(state) { ensureState(); fs.writeFileSync(stateFile, JSON.stringify(state, null, 2) + '\n'); }
-function loadState() { try { return JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch { return null; } }
+function saveResumeState(state) { ensureState(); fs.writeFileSync(resumeFile, JSON.stringify(state, null, 2) + '\n'); }
+function loadResumeState() { try { return JSON.parse(fs.readFileSync(resumeFile, 'utf8')); } catch { return null; } }
 function appendEvent(event) { ensureState(); fs.appendFileSync(eventFile, JSON.stringify({ at: now(), ...event }) + '\n'); }
 function git(args) { const r = spawnSync('git', args, { cwd, encoding: 'utf8' }); return (r.stdout || '').trim(); }
 function gitSnapshot() { return { branch: git(['branch', '--show-current']), status: git(['status', '--short']), diff: git(['diff', '--stat']) }; }
@@ -108,6 +110,13 @@ function completeSlashCommand(line) {
     .filter(([command]) => command.startsWith(line))
     .map(([command]) => command);
   return [hits.length ? hits : slashCommands.map(([command]) => command), line];
+}
+
+function resolveSlashCommand(input) {
+  const exact = slashCommands.find(([command]) => command === input)?.[0];
+  if (exact) return exact;
+  const matches = slashCommands.filter(([command]) => command.startsWith(input));
+  return matches.length === 1 ? matches[0][0] : null;
 }
 
 function printSlashHints() {
@@ -191,7 +200,9 @@ async function workflow(task, config, render = createConsoleRenderer()) {
   ensureState();
   const state = { id: id(), task, phase: 'starting', round: 0, maxRounds: config.workflow.maxRounds, startedAt: now(), updatedAt: now(), snapshot: gitSnapshot(), outputs: {} };
   saveState(state); appendEvent({ type: 'session.started', task });
-  const event = (e) => { state.updatedAt = now(); appendEvent(e); render(e, state); saveState(state); };
+  let resumable = false;
+  const persist = () => { saveState(state); if (resumable) saveResumeState(state); };
+  const event = (e) => { state.updatedAt = now(); appendEvent(e); render(e, state); persist(); };
   try {
     state.phase = 'lead'; event({ type: 'phase', phase: state.phase, agent: 'claude' });
     const plan = await runAgent('claude', `You are the lead agent and router in DuetAI. Decide whether to answer by yourself or bring in Codex.\n\nFor conversation, greetings, general questions, explanations, and advice: do not inspect files and do not call tools. Return exactly:\nMODE: CHAT\nRESPONSE: <a direct, natural answer>\n\nOnly when the request requires implementation, file changes, tests, debugging, or a second coding agent: inspect the workspace but do not edit it. Return MODE: DUET, then a concrete plan no longer than 12 lines using the headings PLAN, FILES, ACCEPTANCE, RISKS, TESTS. Prefer specific paths and commands; do not narrate tool calls. Codex will implement your plan and you will review its work.\n\nUSER MESSAGE:\n${task}`, config, event);
@@ -201,6 +212,7 @@ async function workflow(task, config, render = createConsoleRenderer()) {
       appendEvent({ type: 'session.completed', mode: 'chat' }); render({ type: 'chat', text: response }, state); return state;
     }
     plan.output = plan.output.replace(/^MODE:\s*DUET\s*/im, '').trim();
+    resumable = true;
     state.phase = 'planning';
     state.outputs.plan = plan.output; event({ type: 'phase.completed', phase: 'planning', text: compact(plan.output) });
     for (let round = 1; round <= config.workflow.maxRounds; round++) {
@@ -214,8 +226,8 @@ async function workflow(task, config, render = createConsoleRenderer()) {
       if (round === config.workflow.maxRounds) break;
     }
     if (config.workflow.runTests) { state.phase = 'tests'; event({ type: 'phase', phase: state.phase }); const result = spawnSync(config.workflow.testCommand, { cwd, shell: true, encoding: 'utf8' }); state.outputs.tests = (result.stdout || '') + (result.stderr || ''); event({ type: 'phase.completed', phase: state.phase, code: result.status, text: compact(state.outputs.tests) }); }
-    state.phase = 'complete'; state.snapshot = gitSnapshot(); state.updatedAt = now(); saveState(state); appendEvent({ type: 'session.completed', snapshot: state.snapshot }); render({ type: 'complete', text: 'Workflow complete.' }, state); return state;
-  } catch (error) { state.phase = 'failed'; state.error = error.message; state.updatedAt = now(); saveState(state); appendEvent({ type: 'session.failed', error: error.message }); render({ type: 'error', text: error.message }, state); throw error; }
+    state.phase = 'complete'; state.snapshot = gitSnapshot(); state.updatedAt = now(); persist(); appendEvent({ type: 'session.completed', snapshot: state.snapshot }); render({ type: 'complete', text: 'Workflow complete.' }, state); return state;
+  } catch (error) { state.phase = 'failed'; state.error = error.message; state.updatedAt = now(); persist(); appendEvent({ type: 'session.failed', error: error.message }); render({ type: 'error', text: error.message }, state); throw error; }
 }
 
 function phaseLabel(phase, agent) {
@@ -336,7 +348,7 @@ async function interactive(config) {
   };
   process.stdin.on('keypress', onKeypress);
   for await (const input of rl) {
-    const task = input.trim();
+    let task = input.trim();
     const showedSlashHints = slashHintsShown;
     slashHintsShown = false;
     if (pending?.type === 'permissions') {
@@ -366,7 +378,17 @@ async function interactive(config) {
       pending = null; rl.setPrompt(`${color('cyan', '›')} `); rl.prompt(); continue;
     }
     if (!task) { rl.prompt(); continue; }
-    if (['/exit', '/quit'].includes(task)) break;
+    if (task.startsWith('/') && task !== '/') {
+      const command = resolveSlashCommand(task);
+      if (!command) {
+        console.log(color('yellow', `Unknown command: ${task}`));
+        printSlashHints();
+        rl.prompt();
+        continue;
+      }
+      task = command;
+    }
+    if (task === '/exit') break;
     if (task === '/permissions') {
       console.log(`  1  safe       ${color('dim', 'read-only')}\n  2  workspace  ${color('dim', 'edit current project')}\n  3  full       ${color('dim', 'unrestricted')}`);
       pending = { type: 'permissions' }; rl.setPrompt(`${color('yellow', 'Permissions')} › `); rl.prompt(); continue;
@@ -382,7 +404,7 @@ async function interactive(config) {
       continue;
     }
     if (task === '/resume') {
-      const previous = loadState();
+      const previous = loadResumeState();
       if (!previous?.task) { console.log(color('yellow', 'Nothing to resume.')); rl.prompt(); continue; }
       const continuation = `Continue the previous task.\n\nORIGINAL TASK:\n${previous.task}\n\nPREVIOUS RESULT OR REVIEW:\n${previous.outputs?.review || previous.outputs?.response || previous.error || 'No result recorded.'}`;
       try { await workflow(continuation, config, createConsoleRenderer()); } catch {}
