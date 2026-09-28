@@ -1,4 +1,4 @@
-# DuetAI 0.2 launch draft
+# DuetAI 0.2 launch notes
 
 ## Positioning
 
@@ -15,6 +15,8 @@ DuetAI is for developers who already use both CLIs and want a sequential impleme
 - Stream parsing handles terminal Claude results, structured errors, and split UTF-8 text.
 - Available token usage is stored per agent phase; unknown cost remains unknown.
 - Automated CI and clean-package installation checks cover the portable setup.
+
+Ready-to-use social materials are in [promotion.md](promotion.md). The scripted browser walkthrough and CLI offline demo are available; the new real-agent recording remains pending.
 
 ## Announcement draft
 

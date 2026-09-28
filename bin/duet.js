@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import readline from 'node:readline';
+import { fileURLToPath } from 'node:url';
 import { parseReviewVerdict } from '../src/verdict.js';
 import { agentArgs, agentEnvironment } from '../src/agents.js';
 import { eventUsage, sumUsage } from '../src/usage.js';
@@ -416,7 +417,34 @@ function shutdown(code = 0) {
 process.on('SIGTERM', () => shutdown(143));
 
 async function main() {
-  if (process.argv.length > 2) throw new Error('Run DuetAI without arguments: duet');
+  const args = process.argv.slice(2);
+  if (args.length === 1 && ['--help', '-h'].includes(args[0])) {
+    console.log(`DuetAI ${VERSION} — Claude plans and reviews; Codex implements and fixes.
+
+Usage:
+  duet           Open the workspace in the current directory
+  duet --demo    Offline example: scripted agents, real tests, no account
+  duet --doctor  Check installed tools without model requests
+  duet --version Print the version
+
+Inside the workspace: /resume, /permissions, /model, /exit
+Docs: https://github.com/dancher00/duetai`);
+    return;
+  }
+  if (args.length === 1 && args[0] === '--version') { console.log(VERSION); return; }
+  if (args.length === 1 && args[0] === '--demo') {
+    // Demo owns signal cleanup for its subprocess tree.
+    process.removeAllListeners('SIGTERM');
+    const { runDemo } = await import('../src/demo.js');
+    process.exitCode = await runDemo(fileURLToPath(import.meta.url));
+    return;
+  }
+  if (args.length === 1 && args[0] === '--doctor') {
+    const { doctor } = await import('../src/doctor.js');
+    process.exitCode = doctor(loadConfig());
+    return;
+  }
+  if (args.length) throw new Error('Unknown arguments. Run duet --help for usage.');
   await interactive(loadConfig());
 }
 

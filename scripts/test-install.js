@@ -29,6 +29,10 @@ try {
   const prompt = run(cli, [], { cwd: project, env, input: '/\n/exit\n' });
   assert.match(prompt.stdout, /Claude leads/);
   assert.doesNotMatch(prompt.stdout, /API key:/);
+  const demo = run(cli, ['--demo'], { cwd: project, env: { ...env, DUET_DEMO_FAST: '1' } });
+  assert.match(demo.stdout, /scripted agents, real tests/);
+  assert.match(demo.stdout, /rounds: 2\/2/);
+  assert.equal(fs.existsSync(path.join(project, '.duet')), false);
   // Exercise the installed package, not imports from the source checkout.
   const agent = path.join(temp, 'agent.cjs');
   fs.writeFileSync(agent, `#!/usr/bin/env node
@@ -44,7 +48,7 @@ console.log(JSON.stringify({text}));
   fs.writeFileSync(path.join(project, '.duet.json'), JSON.stringify({ claude: { command: agent }, codex: { command: agent } }));
   const workflow = run(cli, [], { cwd: project, env, input: 'Implement a feature\n/exit\n' });
   assert.match(workflow.stdout, /Workflow complete/);
-  console.log(`Clean package install passed (${pack.size} bytes): empty home, no keys, mock workflow.`);
+  console.log(`Clean package install passed (${pack.size} bytes): empty home, no keys, offline demo and mock workflow.`);
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });
 }

@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://dancher00.github.io/duetai/sitemap.xml

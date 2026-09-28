@@ -1,10 +1,17 @@
 <h1 align="center">DuetAI</h1>
 
-<p align="center"><strong>Claude plans and reviews. Codex implements and fixes.<br>One command in your repository.</strong></p>
+<p align="center"><strong>Claude plans and reviews. Codex implements and fixes.<br>Two coding agents. One terminal.</strong></p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/dancher00/duetai/main/assets/duetai-teaser.svg" alt="Claude plans and reviews; Codex implements and fixes" width="900">
+  <a href="https://github.com/dancher00/duetai/actions/workflows/ci.yml"><img src="https://github.com/dancher00/duetai/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-276c58" alt="MIT license"></a>
+  <img src="https://img.shields.io/badge/Node.js-20%2B-276c58" alt="Node.js 20 or newer">
 </p>
+
+<p align="center"><a href="https://dancher00.github.io/duetai/">Interactive walkthrough</a> · <a href="#try-it-in-one-command">Try the demo</a> · <a href="https://github.com/dancher00/duetai/issues/new?template=feedback.yml">Share feedback</a></p>
+
+<p align="center"><img src="https://raw.githubusercontent.com/dancher00/duetai/main/assets/workflow-demo.gif" alt="Scripted walkthrough: Claude plans, Codex implements, review catches a missing upper bound, and the fix passes" width="850"></p>
+<p align="center"><sub>Scripted walkthrough, not recorded model output. The CLI demo runs real local tests.</sub></p>
 
 DuetAI coordinates your installed Claude Code and Codex CLIs in a local terminal. Give it a coding task: Claude makes a plan, Codex changes the files, and Claude reviews the result. A `NEEDS_FIX` review sends the findings back to Codex, up to the configured round limit.
 
@@ -18,21 +25,36 @@ Use it when you want a second agent to review changes without copying prompts be
 
 **Early release:** the workflow has automated regression tests and a reproducible comparison harness. Better results than a single agent are a hypothesis to measure, not a guarantee.
 
-## Install
+## Try it in one command
 
-Requirements: **Node.js 20+**, Git, and both [Claude Code](https://code.claude.com/docs/en/overview) and [Codex CLI](https://developers.openai.com/codex/cli) installed and authenticated. Linux and macOS are the initial targets; Windows users should use WSL.
+With **Node.js 20+, npm and Git**, run the offline demo — no agent account or API key needed:
 
-First, verify that `claude` and `codex` each work on their own with your account or provider configuration. DuetAI reuses that setup. It does not ask you to enter API keys.
+```bash
+npx --yes --package=github:dancher00/duetai#v0.2.0 duet --demo
+```
+
+The demo uses **scripted agents and real tests** in a temporary directory. It exercises the actual plan → implementation → failed review → fix → passing review workflow, then removes the temporary files. It makes no model calls and does not change your current project.
+
+For real work, install and authenticate [Claude Code](https://code.claude.com/docs/en/overview) and [Codex CLI](https://developers.openai.com/codex/cli), then run this in your project:
+
+```bash
+npx --yes --package=github:dancher00/duetai#v0.2.0 duet
+```
+
+DuetAI reuses each CLI's existing login and provider settings. Linux and macOS are supported by CI; use WSL on Windows.
+
+### Install a permanent command
 
 ```bash
 git clone https://github.com/dancher00/duetai.git
 cd duetai
 npm link
 cd /path/to/your/project
+duet --doctor
 duet
 ```
 
-Or, after cloning, run `node /path/to/duetai/bin/duet.js` from your project directory.
+`duet --doctor` checks installed tools without model requests. It does not test authentication or sandbox permissions. `duet --help` lists startup options.
 
 ## Inside DuetAI
 
@@ -91,9 +113,14 @@ Add `.duet/` and `.duet.json` to your project's `.gitignore`. DuetAI writes the 
 
 ## Demo and comparison
 
-[Watch the earlier-version terminal demo](https://github.com/dancher00/duetai/blob/main/assets/duetai-demo.mp4). A new recording is pending the environment issue documented in [the launch check](benchmarks/launch-check.md).
+- [Interactive browser walkthrough](https://dancher00.github.io/duetai/) — scripted, no accounts needed.
+- [15-second workflow clip](assets/workflow-demo.mp4) — the same scripted walkthrough.
+- [Actual CLI offline-demo recording](assets/offline-demo.cast) — replay with `asciinema play assets/offline-demo.cast`.
+- [Earlier real-agent recording](assets/duetai-demo.mp4) — recorded before this release.
 
-See [the benchmark procedure](benchmarks/README.md) for three small tasks run against Codex alone, Claude alone, and DuetAI. The harness records independent acceptance results, wall time, available token counts, and provider-reported cost. Real runs use your configured agent accounts.
+The [benchmark harness](benchmarks/README.md) compares Codex alone, Claude alone, and DuetAI on three tasks using independent acceptance checks, wall time, and available usage data. The first live comparison hit a host sandbox limitation; [the report](benchmarks/launch-check.md) makes no quality or speedup claim.
+
+If this workflow is useful to you, **star the repository to follow its progress**. A concrete [task report](https://github.com/dancher00/duetai/issues/new?template=feedback.yml) helps improve it.
 
 ## Development
 
@@ -108,4 +135,4 @@ CI runs these checks on Linux and macOS with Node.js 20, 22, and 24. Tests use l
 
 For bug reports, include your OS, Node/CLI versions, what you expected, and a redacted error message in [an issue](https://github.com/dancher00/duetai/issues).
 
-MIT licensed. Independent project; not affiliated with Anthropic or OpenAI.
+See [CONTRIBUTING.md](CONTRIBUTING.md) to help. MIT licensed. Independent project; not affiliated with Anthropic or OpenAI.

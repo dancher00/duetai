@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+<rect width="1200" height="630" fill="#f5f2eb"/>
+<path d="M60 106h1080M60 552h1080" stroke="#d6d9d0"/>
+<text x="60" y="70" font-family="Arial,sans-serif" font-weight="700" font-size="32" fill="#202923">duet<tspan fill="#ae4b30">ai</tspan></text>
+<text x="1140" y="65" text-anchor="end" font-family="monospace" font-size="15" fill="#667069">OPEN SOURCE · EARLY RELEASE</text>
+<text x="60" y="219" font-family="Arial,sans-serif" font-weight="600" font-size="75" letter-spacing="-3" fill="#202923">Two coding agents.</text>
+<text x="60" y="302" font-family="Georgia,serif" font-style="italic" font-size="81" letter-spacing="-3" fill="#202923">One terminal.</text>
+<text x="63" y="364" font-family="Arial,sans-serif" font-size="25" fill="#667069">Claude plans and reviews. Codex implements and fixes.</text>
+<rect x="60" y="414" width="1080" height="87" rx="8" fill="#19221f"/>
+<text x="99" y="467" font-family="monospace" font-size="18" fill="#e6aa83">CLAUDE / PLAN</text><text x="324" y="467" font-family="monospace" font-size="22" fill="#8b9a86">→</text>
+<text x="385" y="467" font-family="monospace" font-size="18" fill="#bed1a2">CODEX / BUILD</text><text x="605" y="467" font-family="monospace" font-size="22" fill="#8b9a86">→</text>
+<text x="666" y="467" font-family="monospace" font-size="18" fill="#e6aa83">CLAUDE / REVIEW</text><text x="916" y="467" font-family="monospace" font-size="22" fill="#8b9a86">→</text>
+<text x="975" y="467" font-family="monospace" font-size="18" fill="#bed1a2">FIX / PASS</text>
+<text x="60" y="592" font-family="monospace" font-size="16" fill="#667069">Local-first · Existing CLI login · No server</text>
+<text x="1140" y="592" text-anchor="end" font-family="monospace" font-size="16" fill="#202923">github.com/dancher00/duetai</text>
+</svg>

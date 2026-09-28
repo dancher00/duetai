@@ -1,0 +1,23 @@
+name: Report a bug
+description: A reproducible problem with installation or a workflow.
+title: "Bug: "
+body:
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment and redacted error
+      description: Include OS, Node and agent CLI versions. Do not attach API keys or unreviewed .duet logs.
+    validations:
+      required: true
