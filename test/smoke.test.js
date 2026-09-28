@@ -89,14 +89,6 @@ require('node:fs').writeFileSync('codex-was-called', 'yes');
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
-test('keeps agent routing and non-repository support in the single-command CLI', () => {
-  const source = fs.readFileSync(cli, 'utf8');
-  assert.match(source, /--output-format.*stream-json/);
-  assert.match(source, /--skip-git-repo-check/);
-  assert.match(source, /MODE:\\s\*DUET/);
-  assert.doesNotMatch(source, /duet run/);
-});
-
 test('allows Codex to run outside a Git repository', () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'duetai-no-git-'));
   const claude = path.join(sandbox, 'mock-claude.js');
@@ -147,7 +139,7 @@ console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',tex
   assert.match(result.stdout, /Permissions: full/);
   const claudeCalls = fs.readFileSync(path.join(sandbox, 'claude-args.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   const codexCalls = fs.readFileSync(path.join(sandbox, 'codex-args.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.ok(claudeCalls.every(args => args.includes('claude-test')));
+  assert.ok(claudeCalls.every(args => args.includes('claude-test') && args.includes('--output-format') && args.includes('stream-json')));
   assert.equal(codexCalls.length, 2);
   assert.ok(codexCalls.every(args => args.includes('codex-test') && args.includes('danger-full-access')));
   assert.equal(JSON.parse(fs.readFileSync(path.join(sandbox, '.duet', 'last-duet.json'), 'utf8')).phase, 'complete');

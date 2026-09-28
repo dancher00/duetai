@@ -1,7 +1,6 @@
 {
   "codex": {
     "command": "codex",
-    "profile": "llm-proxy-cu",
     "sandbox": "workspace-write"
   },
   "claude": {
