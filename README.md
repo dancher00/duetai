@@ -27,18 +27,18 @@ Use it when you want a second agent to review changes without copying prompts be
 
 ## Try it in one command
 
-With **Node.js 20+, npm and Git**, run the offline demo — no agent account or API key needed:
+With **Node.js 20+ and npm**, run the offline demo — no agent account or API key needed:
 
 ```bash
-npx --yes --package=github:dancher00/duetai#v0.2.0 duet --demo
+npx --yes https://dancher00.github.io/duetai/duetai-cli-0.2.0.tgz --demo
 ```
 
 The demo uses **scripted agents and real tests** in a temporary directory. It exercises the actual plan → implementation → failed review → fix → passing review workflow, then removes the temporary files. It makes no model calls and does not change your current project.
 
-For real work, install and authenticate [Claude Code](https://code.claude.com/docs/en/overview) and [Codex CLI](https://developers.openai.com/codex/cli), then run this in your project:
+For real work, install Git and authenticate [Claude Code](https://code.claude.com/docs/en/overview) and [Codex CLI](https://developers.openai.com/codex/cli), then run this in your project:
 
 ```bash
-npx --yes --package=github:dancher00/duetai#v0.2.0 duet
+npx --yes https://dancher00.github.io/duetai/duetai-cli-0.2.0.tgz
 ```
 
 DuetAI reuses each CLI's existing login and provider settings. Linux and macOS are supported by CI; use WSL on Windows.

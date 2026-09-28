@@ -5,7 +5,7 @@ Claude plans and reviews. Codex implements and fixes. DuetAI connects your exist
 **Try it without an agent account:**
 
 ```bash
-npx --yes --package=github:dancher00/duetai#v0.2.0 duet --demo
+npx --yes https://dancher00.github.io/duetai/duetai-cli-0.2.0.tgz --demo
 ```
 
 The offline demo uses scripted agents and real local tests. It makes no model calls and only changes a temporary directory. [Explore the interactive walkthrough](https://dancher00.github.io/duetai/).

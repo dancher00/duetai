@@ -19,6 +19,8 @@ test('offline demo runs the correction loop without touching the current project
   assert.match(result.stdout, /PASS/);
   assert.match(result.stdout, /Tests.*passed/);
   assert.match(result.stdout, /rounds: 2\/2/);
+  assert.match(result.stdout, /outside Git/);
+  assert.doesNotMatch(result.stdout, /no working-tree changes/);
   assert.deepEqual(fs.readdirSync(cwd), ['keep.txt']);
 });
 

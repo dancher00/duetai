@@ -17,8 +17,18 @@ try {
   const pack = JSON.parse(run('npm', ['pack', '--json', '--pack-destination', temp], { cwd: root }).stdout)[0];
   assert.ok(pack.files.some(file => file.path === 'src/agents.js'));
   assert.ok(!pack.files.some(file => /^(assets|test|\.duet|\.env)(\/|$)/.test(file.path)));
+  const publishedArchive = path.join(root, 'docs', pack.filename);
+  if (fs.existsSync(publishedArchive)) {
+    const unpacked = path.join(temp, 'published');
+    fs.mkdirSync(unpacked);
+    run('tar', ['-xzf', publishedArchive, '-C', unpacked]);
+    for (const file of pack.files) {
+      assert.deepEqual(fs.readFileSync(path.join(unpacked, 'package', file.path)), fs.readFileSync(path.join(root, file.path)),
+        `Published archive is stale: ${file.path}. Rebuild with npm pack --pack-destination docs.`);
+    }
+  }
   const prefix = path.join(temp, 'prefix');
-  run('npm', ['install', '--global', '--prefix', prefix, '--ignore-scripts', '--no-audit', '--no-fund', path.join(temp, pack.filename)]);
+  run('npm', ['install', '--global', '--prefix', prefix, '--ignore-scripts', '--no-audit', '--no-fund', fs.existsSync(publishedArchive) ? publishedArchive : path.join(temp, pack.filename)]);
   const project = path.join(temp, 'project');
   fs.mkdirSync(project);
   const emptyHome = path.join(temp, 'empty-home');

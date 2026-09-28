@@ -11,6 +11,14 @@ npm test
 npm run test:install
 ```
 
+When changing packaged files, regenerate the download before the installation check:
+
+```bash
+npm pack --pack-destination docs
+```
+
+The installation check verifies that the served archive matches the source.
+
 These checks need no agent accounts. `duet --demo` uses scripted agents and real tests in a temporary directory. Real benchmarks consume model usage and are not part of CI.
 
 Please label scripted demonstrations as scripted, keep unsuccessful benchmark runs in reports, and do not claim quality or cost improvements without evidence. Never include `.duet/`, credentials, or private project files in a contribution.

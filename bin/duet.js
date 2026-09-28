@@ -68,7 +68,10 @@ function saveResumeState(state) { ensureState(); fs.writeFileSync(resumeFile, JS
 function loadResumeState() { try { return JSON.parse(fs.readFileSync(resumeFile, 'utf8')); } catch { return null; } }
 function appendEvent(event) { ensureState(); fs.appendFileSync(eventFile, JSON.stringify({ at: now(), ...event }) + '\n'); }
 function git(args) { const r = spawnSync('git', args, { cwd, encoding: 'utf8' }); return (r.stdout || '').trim(); }
-function gitSnapshot() { return { branch: git(['branch', '--show-current']), status: git(['status', '--short']), diff: git(['diff', '--stat']) }; }
+function gitSnapshot() {
+  if (!isGitRepository()) return { tracked: false };
+  return { tracked: true, branch: git(['branch', '--show-current']), status: git(['status', '--short']), diff: git(['diff', '--stat']) };
+}
 function isGitRepository() { return spawnSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd, stdio: 'ignore' }).status === 0; }
 
 function completeSlashCommand(line) {
@@ -221,6 +224,7 @@ function phaseLabel(phase, agent) {
 }
 
 function snapshotSummary(snapshot) {
+  if (snapshot?.tracked === false) return 'outside Git · changes are not tracked';
   const files = (snapshot?.status || '').split('\n').filter(Boolean).length;
   const stat = (snapshot?.diff || '').split('\n').filter(Boolean).at(-1) || '';
   if (!files && !stat) return 'no working-tree changes';
