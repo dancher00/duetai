@@ -3,3 +3,6 @@ node_modules/
 .duet.json
 .env
 .DS_Store
+benchmark-results/
+*.tgz
+!docs/duetai-cli-*.tgz

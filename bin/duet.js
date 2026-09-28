@@ -2,12 +2,14 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { spawn, spawnSync } from 'node:child_process';
 import readline from 'node:readline';
-import { reviewNeedsFix } from '../src/verdict.js';
+import { fileURLToPath } from 'node:url';
+import { parseReviewVerdict } from '../src/verdict.js';
+import { agentArgs, agentEnvironment } from '../src/agents.js';
+import { eventUsage, sumUsage } from '../src/usage.js';
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 const activeChildren = new Set();
 let cancellationRequested = false;
 const cwd = process.cwd();
@@ -15,12 +17,8 @@ const stateDir = path.join(cwd, '.duet');
 const stateFile = path.join(stateDir, 'session.json');
 const resumeFile = path.join(stateDir, 'last-duet.json');
 const eventFile = path.join(stateDir, 'events.jsonl');
-const sessionSecrets = {
-  codex: process.env.LLMPROXY_API_KEY || '',
-  claude: process.env.ANTHROPIC_API_KEY || ''
-};
 const defaultConfig = {
-  codex: { command: 'codex', profile: 'llm-proxy-cu', sandbox: 'workspace-write' },
+  codex: { command: 'codex', sandbox: 'workspace-write' },
   claude: { command: 'claude', permissionMode: 'acceptEdits' },
   workflow: { lead: 'claude', maxRounds: 2, runTests: false, testCommand: 'npm test' },
   ui: { maxEvents: 160 }
@@ -39,9 +37,7 @@ const modelSuggestions = {
     ['haiku', 'fast Claude model']
   ],
   codex: [
-    ['default', 'use the configured Codex profile'],
-    ['gpt-5.6-sol', 'GPT-5.6 Sol'],
-    ['gpt-6-sol', 'GPT-6 Sol']
+    ['default', 'use Codex CLI settings']
   ]
 };
 
@@ -72,37 +68,11 @@ function saveResumeState(state) { ensureState(); fs.writeFileSync(resumeFile, JS
 function loadResumeState() { try { return JSON.parse(fs.readFileSync(resumeFile, 'utf8')); } catch { return null; } }
 function appendEvent(event) { ensureState(); fs.appendFileSync(eventFile, JSON.stringify({ at: now(), ...event }) + '\n'); }
 function git(args) { const r = spawnSync('git', args, { cwd, encoding: 'utf8' }); return (r.stdout || '').trim(); }
-function gitSnapshot() { return { branch: git(['branch', '--show-current']), status: git(['status', '--short']), diff: git(['diff', '--stat']) }; }
+function gitSnapshot() {
+  if (!isGitRepository()) return { tracked: false };
+  return { tracked: true, branch: git(['branch', '--show-current']), status: git(['status', '--short']), diff: git(['diff', '--stat']) };
+}
 function isGitRepository() { return spawnSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd, stdio: 'ignore' }).status === 0; }
-
-async function promptSecret(label) {
-  process.stdout.write(label);
-  readline.emitKeypressEvents(process.stdin);
-  process.stdin.setRawMode(true);
-  process.stdin.resume();
-  return new Promise((resolve, reject) => {
-    let value = '';
-    const finish = () => {
-      process.stdin.off('keypress', onKey);
-      process.stdin.setRawMode(false);
-      process.stdout.write('\n');
-    };
-    const onKey = (text, key) => {
-      if ((key?.ctrl && key.name === 'c') || key?.name === 'escape') { finish(); reject(new Error('Credential entry cancelled.')); return; }
-      if (key?.name === 'return' || key?.name === 'enter') { finish(); resolve(value.trim()); return; }
-      if (key?.name === 'backspace') { value = value.slice(0, -1); return; }
-      if (text && !key?.ctrl && !key?.meta) value += text;
-    };
-    process.stdin.on('keypress', onKey);
-  });
-}
-
-function claudeHasKeyHelper() {
-  try {
-    const settings = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8'));
-    return typeof settings.apiKeyHelper === 'string' && settings.apiKeyHelper.trim().length > 0;
-  } catch { return false; }
-}
 
 function completeSlashCommand(line) {
   if (!line.startsWith('/')) return [[], line];
@@ -135,48 +105,49 @@ function printModelHints(kind, current) {
   });
 }
 
-async function ensureInteractiveCredentials() {
-  if (!process.stdin.isTTY) return;
-  if (!sessionSecrets.codex) sessionSecrets.codex = await promptSecret('Codex API key: ');
-  if (!sessionSecrets.claude && !claudeHasKeyHelper()) sessionSecrets.claude = await promptSecret('Claude API key: ');
-  if (!sessionSecrets.codex || (!sessionSecrets.claude && !claudeHasKeyHelper())) throw new Error('Codex and Claude credentials are required.');
-}
-
 function runAgent(kind, prompt, config, onEvent) {
   return new Promise((resolve, reject) => {
     const isCodex = kind === 'codex';
-    const args = isCodex
-      ? ['exec', '--profile', config.codex.profile, '--sandbox', config.codex.sandbox, ...(config.codex.model ? ['--model', config.codex.model] : []), '--json', ...(isGitRepository() ? [] : ['--skip-git-repo-check']), prompt]
-      : ['-p', prompt, '--verbose', '--output-format', 'stream-json', '--permission-mode', config.claude.permissionMode, ...(config.claude.model ? ['--model', config.claude.model] : [])];
-    const { LLMPROXY_API_KEY: _codexKey, ANTHROPIC_API_KEY: _claudeKey, ...baseEnv } = process.env;
-    const agentEnv = isCodex
-      ? { ...baseEnv, ...(sessionSecrets.codex ? { LLMPROXY_API_KEY: sessionSecrets.codex } : {}) }
-      : { ...baseEnv, ...(sessionSecrets.claude ? { ANTHROPIC_API_KEY: sessionSecrets.claude } : {}) };
-    const child = spawn(isCodex ? config.codex.command : config.claude.command, args, { cwd, env: agentEnv, stdio: [process.stdin.isTTY ? 'inherit' : 'ignore', 'pipe', 'pipe'] });
+    const args = agentArgs(kind, prompt, config, isGitRepository());
+    const child = spawn(isCodex ? config.codex.command : config.claude.command, args, {
+      cwd, env: agentEnvironment(kind), stdio: ['ignore', 'pipe', 'pipe']
+    });
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
     activeChildren.add(child);
-    let output = ''; let stderr = ''; let buffer = ''; const messages = [];
+    let output = ''; let stderr = ''; let buffer = ''; let usage = null; let agentError = ''; const messages = [];
     const emit = (event) => { onEvent?.({ agent: kind, ...event }); };
-    child.stdout.on('data', (chunk) => {
-      buffer += chunk.toString();
-      const lines = buffer.split('\n'); buffer = lines.pop() || '';
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const obj = JSON.parse(line); const text = extractText(obj);
-          if (text.trim()) { messages.push(text.trim()); output += `${output ? '\n' : ''}${text.trim()}`; }
-          emit({ type: 'stream', text, raw: obj });
-        }
-        catch { output += line + '\n'; emit({ type: 'stream', text: line }); }
+    const consumeLine = (line) => {
+      if (!line.trim()) return;
+      let obj;
+      try { obj = JSON.parse(line); }
+      catch { output += line + '\n'; emit({ type: 'stream', text: line }); return; }
+      const text = extractText(obj);
+      if (text.trim()) { messages.push(text.trim()); output += `${output ? '\n' : ''}${text.trim()}`; }
+      const reportedUsage = eventUsage(kind, obj);
+      if (reportedUsage) usage = kind === 'codex' && usage ? sumUsage([usage, reportedUsage]) : reportedUsage;
+      if (obj.type === 'turn.failed' || (obj.type === 'result' && obj.is_error)) {
+        agentError = obj.error?.message || obj.result || obj.errors?.join('\n') || 'Agent reported a failed run.';
       }
+      emit({ type: 'stream', text, raw: obj });
+    };
+    child.stdout.on('data', (chunk) => {
+      buffer += chunk;
+      const lines = buffer.split('\n'); buffer = lines.pop() || '';
+      for (const line of lines) consumeLine(line);
     });
     child.stderr.on('data', (chunk) => { stderr += chunk.toString(); const text = chunk.toString().trim(); if (text) emit({ type: 'log', text }); });
-    child.on('error', reject);
+    child.on('error', error => {
+      activeChildren.delete(child);
+      reject(new Error(error.code === 'ENOENT' ? `${kind} CLI not found: ${config[kind].command}. Install it and sign in before running DuetAI.` : error.message));
+    });
     child.on('close', (code, signal) => {
       activeChildren.delete(child);
-      if (buffer.trim()) { output += `${output ? '\n' : ''}${buffer.trim()}`; messages.push(buffer.trim()); emit({ type: 'stream', text: buffer }); }
+      consumeLine(buffer);
       const finalOutput = messages.at(-1) || output.trim();
       if (cancellationRequested) { cancellationRequested = false; reject(new Error('Cancelled.')); return; }
-      if (code === 0) resolve({ output: finalOutput, stderr: stderr.trim() });
+      if (agentError) reject(new Error(`${kind}: ${agentError}`));
+      else if (code === 0) resolve({ output: finalOutput, stderr: stderr.trim(), usage });
       else reject(new Error(`${kind} exited with ${signal || `code ${code}`}${stderr ? `: ${stderr.trim().slice(-800)}` : ''}`));
     });
   });
@@ -184,6 +155,7 @@ function runAgent(kind, prompt, config, onEvent) {
 
 function extractText(obj) {
   if (!obj || typeof obj !== 'object') return '';
+  if (obj.type === 'result' && typeof obj.result === 'string') return obj.result;
   if (typeof obj.text === 'string') return obj.text;
   if (typeof obj.message === 'string') return obj.message;
   if (obj.item && typeof obj.item.text === 'string') return obj.item.text;
@@ -198,7 +170,7 @@ function id() { return `${Date.now().toString(36)}-${Math.random().toString(36).
 
 async function workflow(task, config, render = createConsoleRenderer()) {
   ensureState();
-  const state = { id: id(), task, phase: 'starting', round: 0, maxRounds: config.workflow.maxRounds, startedAt: now(), updatedAt: now(), snapshot: gitSnapshot(), outputs: {} };
+  const state = { id: id(), task, phase: 'starting', round: 0, maxRounds: config.workflow.maxRounds, startedAt: now(), updatedAt: now(), snapshot: gitSnapshot(), outputs: {}, usage: [] };
   saveState(state); appendEvent({ type: 'session.started', task });
   let resumable = false;
   const persist = () => { saveState(state); if (resumable) saveResumeState(state); };
@@ -206,6 +178,7 @@ async function workflow(task, config, render = createConsoleRenderer()) {
   try {
     state.phase = 'lead'; event({ type: 'phase', phase: state.phase, agent: 'claude' });
     const plan = await runAgent('claude', `You are the lead agent and router in DuetAI. Decide whether to answer by yourself or bring in Codex.\n\nFor conversation, greetings, general questions, explanations, and advice: do not inspect files and do not call tools. Return exactly:\nMODE: CHAT\nRESPONSE: <a direct, natural answer>\n\nOnly when the request requires implementation, file changes, tests, debugging, or a second coding agent: inspect the workspace but do not edit it. Return MODE: DUET, then a concrete plan no longer than 12 lines using the headings PLAN, FILES, ACCEPTANCE, RISKS, TESTS. Prefer specific paths and commands; do not narrate tool calls. Codex will implement your plan and you will review its work.\n\nUSER MESSAGE:\n${task}`, config, event);
+    state.usage.push({ agent: 'claude', phase: 'lead', ...plan.usage });
     if (!/^MODE:\s*DUET\b/im.test(plan.output)) {
       const response = plan.output.replace(/^MODE:\s*CHAT\s*/im, '').replace(/^RESPONSE:\s*/im, '').trim();
       state.phase = 'complete'; state.outputs.response = response; state.updatedAt = now(); saveState(state);
@@ -218,14 +191,29 @@ async function workflow(task, config, render = createConsoleRenderer()) {
     for (let round = 1; round <= config.workflow.maxRounds; round++) {
       state.round = round; state.phase = 'implementation'; event({ type: 'phase', phase: state.phase, agent: 'codex', round });
       const implementation = await runAgent('codex', `You are the implementation engineer. Work directly in the current repository. Implement the user's task using the lead plan below. Make the smallest complete change and run relevant tests. Your final response must be useful in a terminal and no longer than 10 lines. Use exactly these headings: DECISION, CHANGED, VALIDATION. Do not narrate tool calls.\n\nUSER TASK:\n${task}\n\nLEAD PLAN:\n${state.outputs.plan}\n\n${round > 1 ? `PREVIOUS REVIEW:\n${state.outputs.review}` : ''}`, config, event);
+      state.usage.push({ agent: 'codex', phase: 'implementation', round, ...implementation.usage });
       state.outputs.implementation = implementation.output; state.snapshot = gitSnapshot(); event({ type: 'phase.completed', phase: 'implementation', text: compact(implementation.output), snapshot: state.snapshot });
       state.phase = 'review'; event({ type: 'phase', phase: state.phase, agent: 'claude', round });
       const review = await runAgent('claude', `You are a meticulous senior reviewer. Do not edit files. Inspect the current git diff and verify the task. Your final response must be useful in a terminal and no longer than 10 lines. Use exactly these headings: VERDICT (PASS or NEEDS_FIX), FINDINGS, WHY, TESTS. Do not narrate tool calls.\n\nTASK:\n${task}\n\nLEAD PLAN:\n${state.outputs.plan}`, { ...config, claude: { ...config.claude, permissionMode: 'plan' } }, event);
+      state.usage.push({ agent: 'claude', phase: 'review', round, ...review.usage });
       state.outputs.review = review.output; state.snapshot = gitSnapshot(); event({ type: 'phase.completed', phase: 'review', text: compact(review.output), snapshot: state.snapshot });
-      if (!reviewNeedsFix(review.output)) break;
-      if (round === config.workflow.maxRounds) break;
+      const verdict = parseReviewVerdict(review.output);
+      if (verdict === 'PASS') break;
+      if (verdict === 'UNKNOWN') throw new Error('Review did not return an unambiguous PASS or NEEDS_FIX verdict.');
     }
-    if (config.workflow.runTests) { state.phase = 'tests'; event({ type: 'phase', phase: state.phase }); const result = spawnSync(config.workflow.testCommand, { cwd, shell: true, encoding: 'utf8' }); state.outputs.tests = (result.stdout || '') + (result.stderr || ''); event({ type: 'phase.completed', phase: state.phase, code: result.status, text: compact(state.outputs.tests) }); }
+    if (parseReviewVerdict(state.outputs.review) !== 'PASS') {
+      throw new Error(`Review did not pass after ${state.round} round(s). Use /resume to continue.`);
+    }
+    if (config.workflow.runTests) {
+      state.phase = 'tests'; event({ type: 'phase', phase: state.phase });
+      const result = spawnSync(config.workflow.testCommand, { cwd, shell: true, encoding: 'utf8' });
+      state.outputs.tests = (result.stdout || '') + (result.stderr || '');
+      state.testResult = { code: result.status, signal: result.signal, error: result.error?.message || null };
+      event({ type: 'phase.completed', phase: state.phase, code: result.status, text: compact(state.outputs.tests) });
+      if (result.error || result.signal || result.status !== 0) {
+        throw new Error(`Final tests failed (${result.error?.message || result.signal || `exit ${result.status}`}). Use /resume to continue.`);
+      }
+    }
     state.phase = 'complete'; state.snapshot = gitSnapshot(); state.updatedAt = now(); persist(); appendEvent({ type: 'session.completed', snapshot: state.snapshot }); render({ type: 'complete', text: 'Workflow complete.' }, state); return state;
   } catch (error) { state.phase = 'failed'; state.error = error.message; state.updatedAt = now(); persist(); appendEvent({ type: 'session.failed', error: error.message }); render({ type: 'error', text: error.message }, state); throw error; }
 }
@@ -236,6 +224,7 @@ function phaseLabel(phase, agent) {
 }
 
 function snapshotSummary(snapshot) {
+  if (snapshot?.tracked === false) return 'outside Git · changes are not tracked';
   const files = (snapshot?.status || '').split('\n').filter(Boolean).length;
   const stat = (snapshot?.diff || '').split('\n').filter(Boolean).at(-1) || '';
   if (!files && !stat) return 'no working-tree changes';
@@ -244,8 +233,7 @@ function snapshotSummary(snapshot) {
 }
 
 function reviewVerdict(text) {
-  const match = String(text || '').match(/\bVERDICT\s*:?\s*(PASS|NEEDS(?:_|\s+)FIX)\b/i);
-  return match ? match[1].toUpperCase().replace(/\s+/g, '_') : 'REVIEWED';
+  return parseReviewVerdict(text);
 }
 
 function elapsed(state) {
@@ -300,7 +288,8 @@ function createConsoleRenderer({ verbose = false, compactMode = false } = {}) {
         console.log(`${color('green', '✓')} Implementation complete ${color('dim', `· ${snapshotSummary(e.snapshot)}`)}`);
         if (!compactMode && !verbose) printReport('Codex', 'Implementation', e.text, 'green', 10);
       } else if (e.phase === 'review') {
-        console.log(`${color('green', '✓')} Review complete ${color(reviewNeedsFix(e.text) ? 'yellow' : 'green', `· ${reviewVerdict(e.text)}`)}`);
+        const verdict = reviewVerdict(state.outputs?.review);
+        console.log(`${color(verdict === 'PASS' ? 'green' : 'yellow', verdict === 'PASS' ? '✓' : '!')} Review complete ${color(verdict === 'PASS' ? 'green' : 'yellow', `· ${verdict}`)}`);
         if (!compactMode && !verbose) printReport('Claude', 'Review', e.text, 'magenta', 10);
       }
       else if (e.phase === 'tests') console.log(`${e.code === 0 ? color('green', '✓') : color('red', '✗')} Tests ${e.code === 0 ? 'passed' : `failed (exit ${e.code})`}`);
@@ -316,14 +305,14 @@ function createConsoleRenderer({ verbose = false, compactMode = false } = {}) {
 }
 
 async function interactive(config) {
-  await ensureInteractiveCredentials();
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: Boolean(process.stdin.isTTY), completer: completeSlashCommand });
+  const prompt = () => { if (!rl.closed) rl.prompt(); };
   let pending = null;
   console.log(`${color('cyan', 'DuetAI')} ${color('dim', `v${VERSION} · ${cwd}`)}`);
   console.log(color('dim', 'Claude leads · Codex implements'));
   console.log(color('dim', 'Type / for commands · Tab completes · Esc exits\n'));
   rl.setPrompt(`${color('cyan', '›')} `);
-  rl.prompt();
+  prompt();
   rl.on('SIGINT', () => shutdown(130));
   let slashHintsShown = false;
   const onKeypress = (text, key) => {
@@ -362,28 +351,28 @@ async function interactive(config) {
         config.claude.permissionMode = selected[1]; config.codex.sandbox = selected[2];
         console.log(color('green', `Permissions: ${selected[0]}`));
       } else console.log(color('yellow', 'Permissions unchanged.'));
-      pending = null; rl.setPrompt(`${color('cyan', '›')} `); rl.prompt(); continue;
+      pending = null; rl.setPrompt(`${color('cyan', '›')} `); prompt(); continue;
     }
     if (pending?.type === 'claude-model') {
       const choice = modelSuggestions.claude[Number(task) - 1]?.[0] || task;
       if (choice) config.claude.model = choice.toLowerCase() === 'default' ? undefined : choice;
       pending = { type: 'codex-model' };
       printModelHints('codex', config.codex.model || 'default');
-      rl.setPrompt(`${color('green', 'Codex model')} ${color('dim', `[${config.codex.model || 'profile default'}]`)} › `); rl.prompt(); continue;
+      rl.setPrompt(`${color('green', 'Codex model')} ${color('dim', `[${config.codex.model || 'CLI default'}]`)} › `); prompt(); continue;
     }
     if (pending?.type === 'codex-model') {
       const choice = modelSuggestions.codex[Number(task) - 1]?.[0] || task;
       if (choice) config.codex.model = choice.toLowerCase() === 'default' ? undefined : choice;
-      console.log(`${color('magenta', 'Claude')}: ${config.claude.model || 'default'} · ${color('green', 'Codex')}: ${config.codex.model || 'profile default'}`);
-      pending = null; rl.setPrompt(`${color('cyan', '›')} `); rl.prompt(); continue;
+      console.log(`${color('magenta', 'Claude')}: ${config.claude.model || 'default'} · ${color('green', 'Codex')}: ${config.codex.model || 'CLI default'}`);
+      pending = null; rl.setPrompt(`${color('cyan', '›')} `); prompt(); continue;
     }
-    if (!task) { rl.prompt(); continue; }
+    if (!task) { prompt(); continue; }
     if (task.startsWith('/') && task !== '/') {
       const command = resolveSlashCommand(task);
       if (!command) {
         console.log(color('yellow', `Unknown command: ${task}`));
         printSlashHints();
-        rl.prompt();
+        prompt();
         continue;
       }
       task = command;
@@ -391,29 +380,30 @@ async function interactive(config) {
     if (task === '/exit') break;
     if (task === '/permissions') {
       console.log(`  1  safe       ${color('dim', 'read-only')}\n  2  workspace  ${color('dim', 'edit current project')}\n  3  full       ${color('dim', 'unrestricted')}`);
-      pending = { type: 'permissions' }; rl.setPrompt(`${color('yellow', 'Permissions')} › `); rl.prompt(); continue;
+      pending = { type: 'permissions' }; rl.setPrompt(`${color('yellow', 'Permissions')} › `); prompt(); continue;
     }
     if (task === '/model') {
       pending = { type: 'claude-model' };
       printModelHints('claude', config.claude.model || 'default');
-      rl.setPrompt(`${color('magenta', 'Claude model')} ${color('dim', `[${config.claude.model || 'default'}]`)} › `); rl.prompt(); continue;
+      rl.setPrompt(`${color('magenta', 'Claude model')} ${color('dim', `[${config.claude.model || 'default'}]`)} › `); prompt(); continue;
     }
     if (task === '/' && !showedSlashHints) {
       printSlashHints();
-      rl.prompt();
+      prompt();
       continue;
     }
     if (task === '/resume') {
       const previous = loadResumeState();
-      if (!previous?.task) { console.log(color('yellow', 'Nothing to resume.')); rl.prompt(); continue; }
-      const continuation = `Continue the previous task.\n\nORIGINAL TASK:\n${previous.task}\n\nPREVIOUS RESULT OR REVIEW:\n${previous.outputs?.review || previous.outputs?.response || previous.error || 'No result recorded.'}`;
-      try { await workflow(continuation, config, createConsoleRenderer()); } catch {}
-      console.log(); rl.prompt(); continue;
+      if (!previous?.task) { console.log(color('yellow', 'Nothing to resume.')); prompt(); continue; }
+      const continuation = `Continue the previous task.\n\nORIGINAL TASK:\n${previous.task}\n\nPREVIOUS RESULT OR REVIEW:\n${previous.outputs?.review || previous.outputs?.response || 'No result recorded.'}\n\nPREVIOUS ERROR:\n${previous.error || 'None'}\n\nFINAL TEST OUTPUT:\n${previous.outputs?.tests || 'Not run'}`;
+      try { await workflow(continuation, config, createConsoleRenderer()); }
+      catch { if (!process.stdin.isTTY) process.exitCode = 1; }
+      console.log(); prompt(); continue;
     }
     try { await workflow(task, config, createConsoleRenderer()); }
-    catch {}
+    catch { if (!process.stdin.isTTY) process.exitCode = 1; }
     console.log();
-    rl.prompt();
+    prompt();
   }
   process.stdin.off('keypress', onKeypress);
   rl.close();
@@ -431,7 +421,34 @@ function shutdown(code = 0) {
 process.on('SIGTERM', () => shutdown(143));
 
 async function main() {
-  if (process.argv.length > 2) throw new Error('Run DuetAI without arguments: duet');
+  const args = process.argv.slice(2);
+  if (args.length === 1 && ['--help', '-h'].includes(args[0])) {
+    console.log(`DuetAI ${VERSION} — Claude plans and reviews; Codex implements and fixes.
+
+Usage:
+  duet           Open the workspace in the current directory
+  duet --demo    Offline example: scripted agents, real tests, no account
+  duet --doctor  Check installed tools without model requests
+  duet --version Print the version
+
+Inside the workspace: /resume, /permissions, /model, /exit
+Docs: https://github.com/dancher00/duetai`);
+    return;
+  }
+  if (args.length === 1 && args[0] === '--version') { console.log(VERSION); return; }
+  if (args.length === 1 && args[0] === '--demo') {
+    // Demo owns signal cleanup for its subprocess tree.
+    process.removeAllListeners('SIGTERM');
+    const { runDemo } = await import('../src/demo.js');
+    process.exitCode = await runDemo(fileURLToPath(import.meta.url));
+    return;
+  }
+  if (args.length === 1 && args[0] === '--doctor') {
+    const { doctor } = await import('../src/doctor.js');
+    process.exitCode = doctor(loadConfig());
+    return;
+  }
+  if (args.length) throw new Error('Unknown arguments. Run duet --help for usage.');
   await interactive(loadConfig());
 }
 

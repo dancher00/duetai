@@ -1,15 +1,41 @@
 {
   "name": "duetai-cli",
-  "version": "0.1.0",
-  "description": "A focused terminal workspace for Claude Code and Codex working as a team.",
+  "version": "0.2.0",
+  "description": "Claude plans and reviews. Codex implements and fixes. One terminal command.",
   "type": "module",
-  "bin": { "duet": "bin/duet.js" },
+  "bin": {
+    "duet": "bin/duet.js"
+  },
   "scripts": {
     "start": "node bin/duet.js",
-    "check": "node --check bin/duet.js",
-    "test": "node --test"
+    "check": "node --check bin/duet.js && node --check scripts/benchmark.js",
+    "test": "node --test test/*.test.js",
+    "test:install": "node scripts/test-install.js",
+    "benchmark": "node scripts/benchmark.js"
   },
-  "keywords": ["claude-code", "codex", "ai", "agents", "tui", "terminal"],
+  "keywords": [
+    "claude-code",
+    "codex",
+    "ai",
+    "agents",
+    "tui",
+    "terminal"
+  ],
   "license": "MIT",
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    ".duet.example.json"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dancher00/duetai.git"
+  },
+  "homepage": "https://github.com/dancher00/duetai#readme",
+  "bugs": {
+    "url": "https://github.com/dancher00/duetai/issues"
+  }
 }

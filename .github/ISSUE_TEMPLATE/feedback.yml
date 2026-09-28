@@ -1,0 +1,34 @@
+name: Share a task you tried
+description: Help improve DuetAI with a concrete experience.
+title: "Feedback: "
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for trying DuetAI. A small, reproducible example is useful even when the tool did not help.
+  - type: dropdown
+    id: experience
+    attributes:
+      label: What did you try?
+      options:
+        - Offline demo
+        - A real coding task
+        - Installation or setup
+    validations:
+      required: true
+  - type: textarea
+    id: task
+    attributes:
+      label: Task and outcome
+      description: What did you ask it to do, and what happened? Remove private code and credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: value
+    attributes:
+      label: Did the second review help?
+      description: A caught bug, wasted round, unclear output, or comparison with one agent is useful.
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: OS, Node version, Claude Code version, Codex version
